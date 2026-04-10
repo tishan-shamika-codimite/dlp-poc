@@ -1,0 +1,38 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.aps
+*.ncb
+*.sdf
+*.opensdf
+*.cachefile
+*.VC.db
+*.VC.opendb
+
+# Build output
+x64/
+x86/
+Debug/
+Release/
+*.obj
+*.pch
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+*.iobj
+*.ipdb
+
+# NuGet packages
+packages/
+*.nupkg
+
+# Recipe files
+*.recipe
+*.FileListAbsolute.txt
+
+# Log files
+*.log
