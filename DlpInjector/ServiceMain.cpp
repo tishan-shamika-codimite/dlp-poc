@@ -167,7 +167,19 @@ bool InstallService() {
     ChangeServiceConfig2W(hService, SERVICE_CONFIG_DESCRIPTION, &desc);
 
     std::wcout << L"Service installed successfully." << std::endl;
-    std::wcout << L"Run 'sc start " << SERVICE_NAME << L"' to start the service." << std::endl;
+
+    // Attempt to start the service immediately
+    if (StartServiceW(hService, 0, NULL)) {
+        std::wcout << L"Service started successfully." << std::endl;
+    } else {
+        DWORD err = GetLastError();
+        if (err == ERROR_SERVICE_ALREADY_RUNNING) {
+            std::wcout << L"Service is already running." << std::endl;
+        } else {
+            std::wcerr << L"Service installed but failed to start (error: " << err << L")." << std::endl;
+            std::wcerr << L"Run 'sc start " << SERVICE_NAME << L"' to start it manually." << std::endl;
+        }
+    }
 
     CloseServiceHandle(hService);
     CloseServiceHandle(hSCM);

@@ -154,6 +154,9 @@ Open `DlpInjector/DlpInjector.sln` in Visual Studio and build for `Release | x64
 # Install as a service
 DlpInjector.exe --install
 
+# Start the service (first time after install)
+sc start DlpService
+
 # Run in console/debug mode
 DlpInjector.exe --console
 

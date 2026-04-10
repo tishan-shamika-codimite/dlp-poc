@@ -191,6 +191,19 @@ static bool HandleHasCreditCardData(UINT uFormat, HANDLE hMem) {
     return false;
 }
 
+// --- USER NOTIFICATION ---
+
+static DWORD WINAPI ShowBlockNotification(LPVOID lpParam) {
+    const wchar_t* message = static_cast<const wchar_t*>(lpParam);
+    MessageBoxW(NULL, message, L"Browser Bridge Security Alert", MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL);
+    return 0;
+}
+
+static void NotifyUser(const wchar_t* message) {
+    // Show MessageBox on a separate thread to avoid blocking the hooked application
+    CreateThread(NULL, 0, ShowBlockNotification, (LPVOID)message, 0, NULL);
+}
+
 // --- HOOK DETOURS ---
 
 HANDLE WINAPI Detour_GetClipboardData(UINT uFormat) {
@@ -199,6 +212,7 @@ HANDLE WINAPI Detour_GetClipboardData(UINT uFormat) {
     if (hResult && (uFormat == CF_TEXT || uFormat == CF_OEMTEXT || uFormat == CF_UNICODETEXT)) {
         if (HandleHasCreditCardData(uFormat, hResult)) {
             OutputDebugStringA("[DLP] BLOCKED paste - credit card data detected");
+            NotifyUser(L"Paste blocked: Sensitive data detected.\nThis action has been prevented by Browser Bridge.");
             return NULL; // Clipboard memory is owned by the system; do not free
         }
     }
@@ -216,6 +230,7 @@ HRESULT WINAPI Detour_OleGetClipboard(LPDATAOBJECT* ppDataObj) {
             ReleaseStgMedium(&stg);
             if (sensitive) {
                 OutputDebugStringA("[DLP] BLOCKED paste - credit card data detected (OLE)");
+                NotifyUser(L"Paste blocked: Sensitive data detected.\nThis action has been prevented by Browser Bridge.");
                 (*ppDataObj)->Release();
                 *ppDataObj = NULL;
                 return E_ACCESSDENIED;
@@ -230,6 +245,7 @@ HANDLE WINAPI Detour_SetClipboardData(UINT uFormat, HANDLE hMem) {
     if (hMem && (uFormat == CF_TEXT || uFormat == CF_OEMTEXT || uFormat == CF_UNICODETEXT)) {
         if (HandleHasCreditCardData(uFormat, hMem)) {
             OutputDebugStringA("[DLP] BLOCKED copy - credit card data detected");
+            NotifyUser(L"Copy blocked: Sensitive data detected.\nThis action has been prevented by Browser Bridge.");
             // Return NULL to signal failure; caller retains ownership and must free hMem
             return NULL;
         }
@@ -247,6 +263,7 @@ HRESULT WINAPI Detour_OleSetClipboard(LPDATAOBJECT pDataObj) {
             ReleaseStgMedium(&stg);
             if (sensitive) {
                 OutputDebugStringA("[DLP] BLOCKED copy - credit card data detected (OLE)");
+                NotifyUser(L"Copy blocked: Sensitive data detected.\nThis action has been prevented by Browser Bridge.");
                 return E_ACCESSDENIED;
             }
         }
