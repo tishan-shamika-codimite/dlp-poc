@@ -24,7 +24,7 @@ The system is split into two components:
 The injector uses the classic **`CreateRemoteThread` + `LoadLibraryA`** injection technique:
 
 1. Enumerates all running processes using `CreateToolhelp32Snapshot`.
-2. For every instance of a target process (`chrome.exe`, `msedge.exe`, `Slack.exe`, `notepad.exe`), it:
+2. For every instance of a target process (`chrome.exe`, `msedge.exe`, `Slack.exe`), it:
    - Opens the process with `OpenProcess(PROCESS_ALL_ACCESS, ...)`.
    - Allocates memory inside the target process with `VirtualAllocEx`.
    - Writes the full path of `DLPHook.dll` into that memory using `WriteProcessMemory`.
