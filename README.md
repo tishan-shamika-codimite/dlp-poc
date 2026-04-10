@@ -1,87 +1,116 @@
-# DLP Clipboard Guard
+# DLP Agent — Browser Bridge
 
-A Windows **Data Loss Prevention (DLP)** proof-of-concept that intercepts clipboard operations system-wide to detect and block sensitive data — specifically credit card numbers — from being copied or pasted into any target application.
-
----
-
-## What is this project?
-
-This project demonstrates a **kernel-free, user-space DLP agent** for Windows. It silently monitors clipboard activity across monitored processes (browsers, chat clients, text editors) and automatically blocks any copy/paste operation that contains a valid credit card number.
-
-The system is split into two components:
-
-| Component | Type | Purpose |
-|---|---|---|
-| `DLPHook` | x64 DLL | Installs clipboard hooks inside a target process |
-| `DlpInjector` | x64 EXE | Injects `DLPHook.dll` into all running target processes |
+A Windows **Data Loss Prevention (DLP)** system that prevents sensitive data (credit card numbers) from being copied or pasted through browsers and other applications on domain-joined machines.
 
 ---
 
-## Mechanism: DLL Injection + API Hooking
+## Overview
 
-### 1. DLL Injection (`DlpInjector`)
+The DLP Agent runs as a Windows Service on enterprise workstations. It continuously monitors target applications and injects a hook DLL that intercepts clipboard operations. When a user attempts to copy or paste data containing valid credit card numbers, the operation is silently blocked.
 
-The injector uses the classic **`CreateRemoteThread` + `LoadLibraryA`** injection technique:
+**Target applications:** Chrome, Edge, Slack
 
-1. Enumerates all running processes using `CreateToolhelp32Snapshot`.
-2. For every instance of a target process (`chrome.exe`, `msedge.exe`, `Slack.exe`), it:
-   - Opens the process with `OpenProcess(PROCESS_ALL_ACCESS, ...)`.
-   - Allocates memory inside the target process with `VirtualAllocEx`.
-   - Writes the full path of `DLPHook.dll` into that memory using `WriteProcessMemory`.
-   - Spawns a remote thread inside the target via `CreateRemoteThread`, pointing it at `LoadLibraryA` — forcing the target process to load the DLL itself.
+---
 
-### 2. API Hooking (`DLPHook`)
+## Architecture
 
-Once loaded, `DLPHook.dll`'s `DllMain` uses **[MinHook](https://github.com/TsudaKageyu/minhook)** to redirect four Windows API functions to custom detour functions:
+```
+Active Directory GPO
+        │
+        ▼
+Install-DlpService.ps1  (runs at machine startup as SYSTEM)
+        │
+        ▼
+DlpInjector.exe          (Windows Service — monitors processes)
+        │
+        ▼
+DLPHook.dll              (injected into target processes — hooks clipboard APIs)
+```
 
-| Hooked API | Library | Covers |
+### Components
+
+| Component | Description |
+|---|---|
+| **DlpInjector.exe** | Windows Service that enumerates running processes every 3 seconds and injects the hook DLL into target applications via remote thread creation (`CreateRemoteThread` + `LoadLibraryA`). |
+| **DLPHook.dll** | In-process DLL that uses [MinHook](https://github.com/TsudaKageworyu/minhook) to detour clipboard APIs. Scans clipboard content for credit card patterns and validates them with the Luhn algorithm. |
+| **Deploy scripts** | PowerShell scripts for GPO-based installation and uninstallation across domain machines. |
+
+---
+
+## How It Works
+
+### 1. DLL Injection
+
+The service runs with `SeDebugPrivilege`, which allows it to inject across user sessions. For each target process it:
+
+1. Opens the process with `PROCESS_ALL_ACCESS`
+2. Allocates memory in the target process (`VirtualAllocEx`)
+3. Writes the DLL path into that memory
+4. Creates a remote thread that calls `LoadLibraryA` to load `DLPHook.dll`
+
+### 2. API Hooking
+
+Once loaded, `DLPHook.dll` hooks four clipboard functions using MinHook:
+
+| Hooked API | Source DLL | Purpose |
 |---|---|---|
-| `GetClipboardData` | `user32.dll` | Standard paste (Win32) |
-| `SetClipboardData` | `user32.dll` | Standard copy (Win32) |
-| `OleGetClipboard` | `ole32.dll` | Paste via OLE (modern apps, browsers) |
-| `OleSetClipboard` | `ole32.dll` | Copy via OLE (modern apps, browsers) |
-
-MinHook works by **overwriting the first few bytes** of the target function with a `JMP` instruction pointing to the detour, while saving a trampoline back to the original function.
+| `GetClipboardData` | user32.dll | Intercepts paste (standard) |
+| `SetClipboardData` | user32.dll | Intercepts copy (standard) |
+| `OleGetClipboard` | ole32.dll | Intercepts paste (OLE/modern apps like Chrome) |
+| `OleSetClipboard` | ole32.dll | Intercepts copy (OLE) |
 
 ### 3. Sensitive Data Detection
 
-Every clipboard read/write passes through a two-stage check:
+When a clipboard operation is intercepted, the hook:
 
-1. **Regex scan** — extracts all digit sequences (13–19 digits, optionally separated by spaces or dashes) from the clipboard text (both `CF_TEXT` ANSI and `CF_UNICODETEXT` wide strings).
-2. **Luhn algorithm** — validates each candidate against the [Luhn checksum](https://en.wikipedia.org/wiki/Luhn_algorithm) used by all major card networks to confirm it is a structurally valid card number.
-
-If a match is found, the detour returns `NULL` (Win32 APIs) or `E_ACCESSDENIED` (OLE APIs), making the clipboard appear empty to the calling application. A debug string is emitted via `OutputDebugStringA` and is visible in tools like [Sysinternals DebugView](https://learn.microsoft.com/en-us/sysinternals/downloads/debugview).
+1. Extracts text from the clipboard handle (supports `CF_TEXT`, `CF_OEMTEXT`, `CF_UNICODETEXT`)
+2. Scans for sequences of 13–19 digits (with optional dashes/spaces)
+3. Validates each match using the **Luhn algorithm** to confirm it is a real credit card number
+4. If a valid card number is found, blocks the operation:
+   - `GetClipboardData` → returns `NULL` (clipboard appears empty)
+   - `SetClipboardData` → returns `FALSE` (copy fails silently)
+   - OLE functions → return `E_ACCESSDENIED`
 
 ---
 
-## How It Works — End-to-End Flow
+## Integration with Windows Active Directory
+
+The DLP Agent is designed for centralized deployment and management through **Active Directory Group Policy Objects (GPO)**.
+
+### Deployment via GPO Startup Script
+
+1. An administrator places `DlpInjector.exe`, `DLPHook.dll`, and the install script on a **domain network share** (default: `\\DC-SERVER\DlpDeploy`).
+2. A **Computer Startup Script GPO** is created and linked to the target Organizational Units (OUs).
+3. When a domain-joined machine boots, Group Policy executes `Install-DlpService.ps1` under the **SYSTEM** account before any user logs on.
+
+### What the Install Script Does
 
 ```
-[DlpInjector.exe]  (run as Administrator)
-        │
-        │  CreateRemoteThread → LoadLibraryA("DLPHook.dll")
-        ▼
-[Target Process: chrome.exe / Slack.exe / ...]
-        │
-        │  DllMain (DLL_PROCESS_ATTACH)
-        ▼
-[MinHook patches IAT/code of target process]
-   GetClipboardData  →  Detour_GetClipboardData
-   SetClipboardData  →  Detour_SetClipboardData
-   OleGetClipboard   →  Detour_OleGetClipboard
-   OleSetClipboard   →  Detour_OleSetClipboard
-        │
-        │  User copies/pastes text
-        ▼
-[Detour function runs]
-   ├─ Regex: does text contain a 13–19 digit card-like pattern?
-   ├─ Luhn:  is the digit string a valid card number?
-   │
-   ├─ YES → Block (return NULL / E_ACCESSDENIED)
-   │         OutputDebugString("[DLP] BLOCKED")
-   │
-   └─ NO  → Forward to original Windows API
+Machine boot
+  → GPO evaluates computer OU membership in AD
+    → Startup script runs as SYSTEM
+      → Copies binaries from domain share to C:\Program Files\DlpAgent
+        → Registers and starts DlpService (auto-start)
 ```
+
+- **Version checking** — compares file timestamps; only updates if the network share has newer binaries.
+- **Automatic updates** — on next reboot, the script detects newer files, stops the service, replaces binaries, and restarts.
+- **Logging** — writes to `%SystemRoot%\Temp\DlpInstall.log`.
+
+### AD Authentication
+
+- The machine account authenticates to the domain share using its **Kerberos/NTLM** computer credentials — no user credentials are needed.
+- NTFS and share permissions on `\\DC-SERVER\DlpDeploy` control which machines can pull the agent.
+- The service runs as **LocalSystem**, which has the necessary privileges for cross-process DLL injection.
+
+### Centralized Management
+
+| Task | How |
+|---|---|
+| Deploy to new machines | Link the GPO to additional OUs |
+| Update the agent | Replace binaries on the network share; machines pick up changes on next reboot |
+| Remove the agent | Run `Uninstall-DlpService.ps1` via GPO or manually |
+| Scope enforcement | Use AD security filtering or WMI filters on the GPO |
 
 ---
 
@@ -89,48 +118,50 @@ If a match is found, the detour returns `NULL` (Win32 APIs) or `E_ACCESSDENIED` 
 
 ```
 Root/
-├── DLPHook/            # The hook DLL
-│   ├── dllmain.cpp     # Hook detours, Luhn check, DllMain
-│   ├── pch.h / pch.cpp # Precompiled headers
-│   └── packages/
-│       └── minhook.1.3.3/   # MinHook NuGet package
+├── DLPHook/                    # Hook DLL project
+│   ├── dllmain.cpp             # Hook implementation & credit card detection
+│   ├── framework.h             # Windows API includes
+│   └── DLPHook.vcxproj         # Visual Studio project
 │
-└── DlpInjector/        # The injector EXE
-    └── DlpInjector.cpp # Process enumeration & DLL injection
+├── DlpInjector/                # Windows Service project
+│   ├── DlpInjector.cpp         # Entry point (service/console modes)
+│   ├── ServiceMain.cpp/.h      # SCM integration & privilege management
+│   ├── InjectionEngine.cpp/.h  # Process monitoring & DLL injection
+│   ├── Logger.cpp/.h           # Windows Event Log wrapper
+│   └── DlpInjector.sln         # Visual Studio solution
+│
+└── Deploy/                     # Deployment scripts
+    ├── Install-DlpService.ps1  # GPO startup install/update script
+    └── Uninstall-DlpService.ps1
 ```
 
 ---
 
-## Prerequisites
+## Building
 
-- Windows 10/11 x64
-- Visual Studio 2019 or later (with Desktop C++ workload)
-- **Administrator privileges** at runtime (required for `OpenProcess` on third-party processes)
-- NuGet package `minhook.1.3.3` (already included under `DLPHook/packages/`)
+**Requirements:**
+- Visual Studio 2022 (v143 toolset)
+- Windows SDK
+- NuGet (MinHook 1.3.3 is restored automatically)
 
----
-
-## Build
-
-1. Open `DLPHook/DLPHook.sln` in Visual Studio and build **x64 | Debug** (or Release).
-2. Open `DlpInjector/DlpInjector.sln` and build **x64 | Release**.
-3. Update the `dllPath` constant in `DlpInjector.cpp` to point to your compiled `DLPHook.dll`.
+Open `DlpInjector/DlpInjector.sln` in Visual Studio and build for `Release | x64` (or `x86` depending on target machines).
 
 ---
 
-## Usage
+## Service Usage
 
-1. Open the target applications (Chrome, Slack, Notepad, etc.).
-2. Run `DlpInjector.exe` **as Administrator**.
-3. The injector will report success/failure per process PID.
-4. Attempt to copy or paste text containing a credit card number — the operation will be silently blocked.
-5. Monitor `[DLP]` log entries with **Sysinternals DebugView** (`dbgview64.exe`, run as Administrator, enable *Capture Global Win32*).
+```powershell
+# Install as a service
+DlpInjector.exe --install
 
----
+# Run in console/debug mode
+DlpInjector.exe --console
 
-## Limitations & Disclaimer
+# Check service status
+DlpInjector.exe --status
 
-- This is a **proof-of-concept** and is **not production-ready**.
-- Processes protected by anti-cheat software, sandboxing, or elevated integrity levels may reject injection.
-- The hook is only active for the lifetime of the injected process; re-injection is needed after a process restart.
-- Use only on systems you own or have explicit authorization to test on.
+# Uninstall the service
+DlpInjector.exe --uninstall
+```
+
+Events are logged to the Windows **Application** event log under the source `DlpService`.

