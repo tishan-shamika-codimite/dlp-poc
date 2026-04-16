@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+  DLP Agent MSI Installer
+
+  Build: dotnet build -c Release
+  Output: bin\Release\DlpAgent.msi
+-->
+
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <!-- Generate new GUIDs before production deployment -->
+  <?define ProductName = "DLP Agent" ?>
+  <?define ProductVersion = "1.0.0.0" ?>
+  <?define Manufacturer = "Browser Bridge" ?>
+  <?define UpgradeCode = "A1B2C3D4-E5F6-7890-ABCD-EF1234567890" ?>
+
+  <Package Name="$(ProductName)"
+           Version="$(ProductVersion)"
+           Manufacturer="$(Manufacturer)"
+           UpgradeCode="$(UpgradeCode)"
+           Compressed="yes"
+           InstallerVersion="500"
+           Scope="perMachine">
+
+    <!-- Embed CAB into MSI for single file deployment -->
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Upgrade logic: removes older versions before installing -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed."
+                  Schedule="afterInstallInitialize" />
+
+    <!-- Installation directory structure -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="DlpAgent">
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Main component: DLP Agent executable and hook DLL -->
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+
+      <!-- DlpInjector.exe the Windows Service executable -->
+      <Component Id="DlpInjectorExe" Guid="B2C3D4E5-F6A7-8901-BCDE-F23456789012">
+        <File Id="DlpInjectorExe"
+              Source="..\DlpInjector\x64\Release\DlpInjector.exe"
+              KeyPath="yes" />
+
+        <!-- Register as Windows Service -->
+        <ServiceInstall Id="DlpServiceInstall"
+                        Type="ownProcess"
+                        Name="DlpService"
+                        DisplayName="DLP Agent Service"
+                        Description="Data Loss Prevention agent that monitors clipboard operations for sensitive data."
+                        Start="auto"
+                        Account="LocalSystem"
+                        ErrorControl="normal">
+          <!-- Service recovery: restart on failure -->
+          <util:ServiceConfig FirstFailureActionType="restart"
+                              SecondFailureActionType="restart"
+                              ThirdFailureActionType="restart"
+                              RestartServiceDelayInSeconds="60"
+                              ResetPeriodInDays="1" />
+        </ServiceInstall>
+
+        <!-- Start service after install, stop before uninstall -->
+        <ServiceControl Id="DlpServiceControl"
+                        Name="DlpService"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+
+      <!-- DLPHook.dll the injection hook library -->
+      <Component Id="DlpHookDll" Guid="C3D4E5F6-A7B8-9012-CDEF-345678901234">
+        <File Id="DlpHookDll"
+              Source="..\DLPHook\x64\Release\DLPHook.dll"
+              KeyPath="yes" />
+      </Component>
+
+    </ComponentGroup>
+
+    <!-- Define the feature (what gets installed) -->
+    <Feature Id="ProductFeature"
+             Title="DLP Agent"
+             Level="1"
+             ConfigurableDirectory="INSTALLFOLDER">
+      <ComponentGroupRef Id="ProductComponents" />
+    </Feature>
+
+  </Package>
+</Wix>

@@ -36,3 +36,11 @@ packages/
 
 # Log files
 *.log
+
+# Installer build output
+Installer/bin/
+Installer/obj/
+*.msi
+*.wixpdb
+*.cab
+UpgradeLog.htm

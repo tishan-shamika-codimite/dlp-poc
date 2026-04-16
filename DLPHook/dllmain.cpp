@@ -99,11 +99,12 @@
 #include <regex>
 #include "MinHook.h"
 
-#ifdef _M_X64
-#pragma comment(lib, "libMinHook.lib")
-#else
-#pragma comment(lib, "libMinHook.x86.lib")
-#endif
+// MinHook is now compiled from source, no need to link library
+// #ifdef _M_X64
+// #pragma comment(lib, "libMinHook.lib")
+// #else
+// #pragma comment(lib, "libMinHook.x86.lib")
+// #endif
 
 typedef HANDLE(WINAPI* GETCLIPBOARDDATA)(UINT);
 typedef HRESULT(WINAPI* OLEGETCLIPBOARD)(LPDATAOBJECT*);

@@ -8,7 +8,7 @@ A Windows **Data Loss Prevention (DLP)** system that prevents sensitive data (cr
 
 The DLP Agent runs as a Windows Service on enterprise workstations. It continuously monitors target applications and injects a hook DLL that intercepts clipboard operations. When a user attempts to copy or paste data containing valid credit card numbers, the operation is silently blocked.
 
-**Target applications:** Chrome, Edge, Slack
+**Target applications:** Chrome, Edge, Slack, Notepad, Adobe Acrobat
 
 ---
 
@@ -130,9 +130,119 @@ Root/
 │   ├── Logger.cpp/.h           # Windows Event Log wrapper
 │   └── DlpInjector.sln         # Visual Studio solution
 │
-└── Deploy/                     # Deployment scripts
-    ├── Install-DlpService.ps1  # GPO startup install/update script
-    └── Uninstall-DlpService.ps1
+├── Deploy/                     # Deployment scripts
+│   ├── Install-DlpService.ps1  # GPO startup install/update script
+│   └── Uninstall-DlpService.ps1
+│
+└── Installer/                  # WiX v4 MSI installer project
+    ├── Package.wxs             # WiX package definition
+    ├── DlpAgent.wixproj        # MSI project file
+    └── Build-Installer.ps1     # PowerShell build script
+```
+
+---
+
+## MSI Installer
+
+The `Installer/` directory contains a **WiX v4** project that builds an MSI for enterprise deployment.
+
+### Prerequisites
+
+- **.NET SDK 6.0+**
+- **Visual Studio 2022** with C++ workload (build the DLP projects first)
+
+### Building the MSI
+
+**Option 1: PowerShell script (Recommended)**
+
+```powershell
+# Build both C++ projects in Visual Studio (Release | x64) first, then:
+.\Installer\Build-Installer.ps1
+```
+
+**Option 2: Command line**
+
+```bash
+cd Installer
+dotnet build -c Release
+```
+
+**Option 3: Visual Studio**
+
+1. Open `Installer\DlpAgent.wixproj` in Visual Studio 2022
+2. Ensure the WiX extension is installed
+3. Build the project
+
+The MSI is generated at `Installer\bin\x64\Release\DlpAgent.msi`.
+
+### Installation Commands
+
+```powershell
+# Silent install
+msiexec /i DlpAgent.msi /qn
+
+# Silent install with logging
+msiexec /i DlpAgent.msi /qn /l*v C:\Windows\Temp\DlpInstall.log
+
+# Silent uninstall
+msiexec /x DlpAgent.msi /qn
+
+# Interactive install (for testing)
+msiexec /i DlpAgent.msi
+```
+
+### Active Directory Deployment via MSI
+
+An alternative to the startup-script approach is GPO **Software Installation**:
+
+**1. Copy MSI to network share**
+
+```powershell
+New-SmbShare -Name "DlpDeploy" -Path "C:\DlpDeploy" -ReadAccess "Domain Computers"
+Copy-Item ".\Installer\bin\x64\Release\DlpAgent.msi" "\\DC-SERVER\DlpDeploy\"
+```
+
+**2. Create GPO for software installation**
+
+1. Open **Group Policy Management Console** (`gpmc.msc`)
+2. Create a new GPO or edit an existing one
+3. Navigate to: `Computer Configuration > Policies > Software Settings > Software Installation`
+4. Right-click → **New > Package**
+5. Browse to `\\DC-SERVER\DlpDeploy\DlpAgent.msi`
+6. Select **Assigned** deployment method
+7. Link the GPO to target OUs
+
+**3. Verify deployment**
+
+```powershell
+# Check service
+Get-Service DlpService
+
+# Check installed programs
+Get-WmiObject -Class Win32_Product | Where-Object { $_.Name -like "*DLP*" }
+```
+
+### Customization
+
+Before production deployment, update `Installer\Package.wxs`:
+
+1. **Generate new GUIDs** — run `[guid]::NewGuid()` in PowerShell and replace `UpgradeCode` and component GUIDs.
+2. **Update company info** — set `Manufacturer` and `ProductName`.
+3. **Version management** — increment `ProductVersion` for each release; keep `UpgradeCode` the same to enable upgrades.
+
+### Troubleshooting
+
+```powershell
+# MSI install fails — check log
+msiexec /i DlpAgent.msi /l*v install.log
+Get-Content install.log | Select-String -Pattern "error|failed" -Context 2
+
+# Service doesn't start — check event log
+Get-EventLog -LogName Application -Source DlpService -Newest 10
+
+# Build fails — ensure C++ projects are built first
+# DlpInjector.sln → Release | x64
+# DLPHook.sln     → Release | x64
 ```
 
 ---

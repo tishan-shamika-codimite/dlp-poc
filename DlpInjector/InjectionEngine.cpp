@@ -7,7 +7,8 @@
 #include <unordered_set>
 
 static const std::vector<std::wstring> TARGET_PROCESSES = {
-    L"Slack.exe", L"chrome.exe", L"msedge.exe", L"notepad.exe"
+    L"Slack.exe", L"chrome.exe", L"msedge.exe", L"notepad.exe",
+    L"Acrobat.exe", L"AcroRd32.exe"
 };
 
 static std::unordered_set<DWORD> g_InjectedPids;
