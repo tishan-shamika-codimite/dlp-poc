@@ -1,5 +1,6 @@
 # Visual Studio
 .vs/
+.vscode/
 *.user
 *.suo
 *.aps
@@ -44,3 +45,7 @@ Installer/obj/
 *.wixpdb
 *.cab
 UpgradeLog.htm
+
+# User-specific files
+.claude/
+.opencode/

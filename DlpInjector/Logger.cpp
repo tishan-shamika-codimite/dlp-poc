@@ -1,26 +1,28 @@
 #include "Logger.h"
 
-static HANDLE g_EventSource = NULL;
+static HANDLE g_eventSource = nullptr;
 
 void LogInit() {
-    g_EventSource = RegisterEventSourceW(NULL, L"DlpService");
+    g_eventSource = RegisterEventSourceW(nullptr, L"DlpService");
 }
 
 void LogShutdown() {
-    if (g_EventSource) {
-        DeregisterEventSource(g_EventSource);
-        g_EventSource = NULL;
+    if (g_eventSource) {
+        DeregisterEventSource(g_eventSource);
+        g_eventSource = nullptr;
     }
 }
 
 void LogInfo(const std::wstring& message) {
-    if (!g_EventSource) return;
+    if (!g_eventSource) return;
     const wchar_t* msg = message.c_str();
-    ReportEventW(g_EventSource, EVENTLOG_INFORMATION_TYPE, 0, 0, NULL, 1, 0, &msg, NULL);
+    ReportEventW(g_eventSource, EVENTLOG_INFORMATION_TYPE, 0, 0,
+                 nullptr, 1, 0, &msg, nullptr);
 }
 
 void LogError(const std::wstring& message) {
-    if (!g_EventSource) return;
+    if (!g_eventSource) return;
     const wchar_t* msg = message.c_str();
-    ReportEventW(g_EventSource, EVENTLOG_ERROR_TYPE, 0, 0, NULL, 1, 0, &msg, NULL);
+    ReportEventW(g_eventSource, EVENTLOG_ERROR_TYPE, 0, 0,
+                 nullptr, 1, 0, &msg, nullptr);
 }

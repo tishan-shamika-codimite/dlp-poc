@@ -142,9 +142,21 @@
     <ClInclude Include="framework.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="minhook-src\include\MinHook.h" />
+    <ClInclude Include="DlpCommon.h" />
+    <ClInclude Include="ClipboardHook.h" />
+    <ClInclude Include="FileUploadHook.h" />
+    <ClInclude Include="ScreenCaptureHook.h" />
+    <ClInclude Include="Inflate.h" />
+    <ClInclude Include="PdfTextExtractor.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
+    <ClCompile Include="DlpCommon.cpp" />
+    <ClCompile Include="ClipboardHook.cpp" />
+    <ClCompile Include="FileUploadHook.cpp" />
+    <ClCompile Include="ScreenCaptureHook.cpp" />
+    <ClCompile Include="Inflate.cpp" />
+    <ClCompile Include="PdfTextExtractor.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
