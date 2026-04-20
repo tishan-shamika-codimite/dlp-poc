@@ -147,6 +147,7 @@
     <ClInclude Include="FileUploadHook.h" />
     <ClInclude Include="Inflate.h" />
     <ClInclude Include="PdfTextExtractor.h" />
+    <ClInclude Include="ScreenCaptureProtection.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
@@ -155,6 +156,7 @@
     <ClCompile Include="FileUploadHook.cpp" />
     <ClCompile Include="Inflate.cpp" />
     <ClCompile Include="PdfTextExtractor.cpp" />
+    <ClCompile Include="ScreenCaptureProtection.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>

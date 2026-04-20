@@ -2,6 +2,7 @@
 #include "FileUploadHook.h"
 #include "DlpCommon.h"
 #include "PdfTextExtractor.h"
+#include "ScreenCaptureProtection.h"
 #include <string>
 #include <shobjidl.h>
 #include <commdlg.h>   // OPENFILENAMEW, LPOPENFILENAMEW, GetOpenFileNameW
@@ -303,45 +304,96 @@ static BOOL WINAPI Detour_GetOpenFileNameW(LPOPENFILENAMEW lpofn) {
 
 // ── Process-name helpers ──────────────────────────────────────────────────────
 //
-//  Used by the CreateFileW hook to distinguish PDF *viewer* processes (Acrobat,
-//  Reader) from *uploader* processes (Chrome, Edge renderer, Slack) so we can
-//  apply the correct policy:
+//  Used by the CreateFileW hook to classify the calling process and apply the
+//  correct DLP policy when a sensitive file is detected:
 //
-//    Viewer process + sensitive PDF → ARM protection, ALLOW the open
-//    Uploader process + sensitive PDF → ARM protection, BLOCK the open
+//    DEDICATED VIEWER (Acrobat, Foxit, …)
+//      → ARM screen-capture protection, ALLOW the file open.
+//        The user legitimately needs to read the document; we protect the
+//        rendered surface so it cannot be screen-captured or screen-shared.
 //
-//  We detect viewer processes by comparing the current process's EXE name (not
-//  its full path) against a small allow-list.  The comparison is
-//  case-insensitive to handle unusual capitalisation.
+//    BROWSER VIEWER (Chrome, Edge, Firefox rendering a PDF inline)
+//      → ARM screen-capture protection, ALLOW the file open.
+//        Same rationale as dedicated viewers: the user opened the PDF
+//        intentionally inside the browser's built-in renderer.  We must
+//        protect the browser window just like an Acrobat window.
+//        NOTE: Chrome runs as multiple processes (browser, renderer, GPU,
+//        utility).  ALL of them are named "chrome.exe", so this classification
+//        covers every process in the Chrome family.
+//
+//    ALL OTHER PROCESSES (Slack, scripts, unknown tools)
+//      → ARM screen-capture protection, BLOCK the file open.
+//        An unrecognised process reading a sensitive PDF from disk is treated
+//        as a potential exfiltration attempt.
 
-static bool IsViewerProcess() {
-    static const wchar_t* kViewerExes[] = {
+// Returns the lower-case EXE filename of the current process (no path).
+static const wchar_t* GetCurrentExeName() {
+    // Static buffer — safe because this is called after process init and the
+    // result never changes for the lifetime of the process.
+    static wchar_t lower[MAX_PATH] = {};
+    static bool    resolved        = false;
+
+    if (!resolved) {
+        wchar_t exePath[MAX_PATH] = {};
+        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+
+        // Extract just the filename component (after last backslash/slash)
+        const wchar_t* fileName = exePath;
+        for (const wchar_t* p = exePath; *p; ++p)
+            if (*p == L'\\' || *p == L'/') fileName = p + 1;
+
+        size_t i = 0;
+        for (; fileName[i] && i < MAX_PATH - 1; ++i)
+            lower[i] = static_cast<wchar_t>(towlower(fileName[i]));
+        lower[i] = L'\0';
+
+        resolved = true;
+    }
+    return lower;
+}
+
+// Dedicated PDF/document viewer applications.
+// Policy: allow file open + arm screen-capture protection.
+static bool IsDedicatedViewerProcess() {
+    static const wchar_t* kDedicatedViewers[] = {
         L"acrobat.exe",
         L"acrord32.exe",
         L"foxitreader.exe",
         L"sumatrapdf.exe",
         L"evince.exe",
     };
-
-    wchar_t exePath[MAX_PATH] = {};
-    if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH)) return false;
-
-    // Extract just the filename component
-    const wchar_t* fileName = exePath;
-    for (const wchar_t* p = exePath; *p; ++p)
-        if (*p == L'\\' || *p == L'/') fileName = p + 1;
-
-    // Case-insensitive compare
-    wchar_t lower[MAX_PATH] = {};
-    size_t i = 0;
-    for (; fileName[i] && i < MAX_PATH - 1; ++i)
-        lower[i] = static_cast<wchar_t>(towlower(fileName[i]));
-    lower[i] = L'\0';
-
-    for (const auto* viewer : kViewerExes)
-        if (wcscmp(lower, viewer) == 0) return true;
-
+    const wchar_t* exe = GetCurrentExeName();
+    for (const auto* name : kDedicatedViewers)
+        if (wcscmp(exe, name) == 0) return true;
     return false;
+}
+
+// Browser processes that have a built-in PDF viewer.
+// Policy: allow file open + arm screen-capture protection on ALL browser
+// windows belonging to this PID (the PDF renders inside the browser frame).
+//
+// Chrome architecture note: every Chrome process — browser, renderer, GPU,
+// utility — is named "chrome.exe".  By matching on the exe name we correctly
+// catch the renderer process that actually reads the PDF file off disk.
+static bool IsBrowserViewerProcess() {
+    static const wchar_t* kBrowserViewers[] = {
+        L"chrome.exe",          // Google Chrome (all process types)
+        L"msedge.exe",          // Microsoft Edge
+        L"firefox.exe",         // Mozilla Firefox
+        L"brave.exe",           // Brave Browser
+        L"opera.exe",           // Opera
+        L"vivaldi.exe",         // Vivaldi
+    };
+    const wchar_t* exe = GetCurrentExeName();
+    for (const auto* name : kBrowserViewers)
+        if (wcscmp(exe, name) == 0) return true;
+    return false;
+}
+
+// Legacy helper retained for call-sites that only need a boolean "is this a
+// trusted viewer?" answer without distinguishing browser vs. dedicated app.
+static bool IsViewerProcess() {
+    return IsDedicatedViewerProcess() || IsBrowserViewerProcess();
 }
 
 // ── Hook 3: CreateFileW ───────────────────────────────────────────────────────
@@ -389,11 +441,141 @@ static HANDLE WINAPI Detour_CreateFileW(
 
             const auto matches = ScanText(textToScan);
             if (!matches.empty()) {
-                if (IsViewerProcess()) {
-                    // ── Viewer policy: allow open ─────────────────────────────
-                    // We allow the file to be opened so the viewer can render it.
-                    OutputDebugStringA("[DLP] Sensitive content detected in viewer — open allowed");
-                    // Fall through — let fpCreateFileW proceed normally.
+                if (IsDedicatedViewerProcess()) {
+                    // ── Dedicated viewer policy: allow open + arm screen-capture ──
+                    //
+                    // We allow the file to open so the viewer renders it normally,
+                    // but we immediately apply WDA_EXCLUDEFROMCAPTURE to every
+                    // window belonging to this process.
+                    OutputDebugStringA("[DLP] Sensitive content detected in dedicated viewer — "
+                                       "open allowed, arming screen-capture protection");
+
+                    const DWORD currentPid = GetCurrentProcessId();
+                    const UINT  protected_ = ScreenCapture_ProtectProcess(currentPid);
+
+                    if (protected_ > 0) {
+                        std::wstring msg =
+                            L"Sensitive document protection active.\n\n"
+                            L"This document contains ";
+                        if (matches.size() == 1) {
+                            msg += matches[0].categoryLabel;
+                        } else {
+                            msg += L"multiple types of sensitive data:";
+                            for (const auto& m : matches) {
+                                msg += L"\n  \u2022 ";
+                                msg += m.patternName;
+                            }
+                        }
+                        msg += L"\n\nScreen capture and screen sharing have been "
+                               L"disabled for this window by Browser Bridge DLP.";
+                        NotifyUser(std::move(msg));
+                    } else {
+                        // Window not visible yet — schedule a retry on a background
+                        // thread (covers slow Acrobat startup paths).
+                        struct RetryCtx {
+                            DWORD pid;
+                            std::vector<DlpMatch> matches;
+                        };
+                        auto* pCtx = new RetryCtx{ currentPid, matches };
+
+                        HANDLE hRetry = CreateThread(nullptr, 0,
+                            [](LPVOID param) -> DWORD {
+                                auto* ctx = static_cast<RetryCtx*>(param);
+                                for (int attempt = 0; attempt < 8; ++attempt) {
+                                    Sleep(500);
+                                    const UINT n = ScreenCapture_ProtectProcess(ctx->pid);
+                                    if (n > 0) {
+                                        OutputDebugStringA("[DLP][SCP] Retry: process window "
+                                                           "found and protected");
+                                        NotifyUser(
+                                            L"Sensitive document protection active.\n\n"
+                                            L"Screen capture and screen sharing have been "
+                                            L"disabled for this window by Browser Bridge DLP.");
+                                        break;
+                                    }
+                                }
+                                delete ctx;
+                                return 0;
+                            },
+                            pCtx, 0, nullptr);
+
+                        if (hRetry) CloseHandle(hRetry);
+                        else        delete pCtx;
+                    }
+
+                    // Fall through — let fpCreateFileW open the file normally.
+
+                } else if (IsBrowserViewerProcess()) {
+                    // ── Browser viewer policy: allow open + arm screen-capture ──
+                    //
+                    // Chrome/Edge/Firefox use a built-in PDF renderer.  The user
+                    // deliberately navigated to or opened this PDF inside the
+                    // browser, so we ALLOW the read (blocking it would show a
+                    // broken PDF tab, not a useful DLP message).
+                    //
+                    // However, we must protect the browser's windows so that
+                    // Win+Shift+S, PrintScreen, and screen-sharing apps (Teams,
+                    // Zoom, OBS) cannot capture the sensitive content rendered in
+                    // the browser tab.
+                    //
+                    // Chrome architecture: every process in the Chrome family
+                    // (browser, renderer, GPU, utility) is named "chrome.exe".
+                    // We protect ALL top-level + child windows for this PID, which
+                    // covers the renderer process that actually paints the PDF tab.
+                    OutputDebugStringA("[DLP] Sensitive content detected in browser viewer — "
+                                       "open allowed, arming screen-capture protection on browser");
+
+                    const DWORD currentPid = GetCurrentProcessId();
+                    const UINT  protected_ = ScreenCapture_ProtectProcess(currentPid);
+
+                    if (protected_ > 0) {
+                        std::wstring msg =
+                            L"Sensitive document protection active.\n\n"
+                            L"This PDF contains ";
+                        if (matches.size() == 1) {
+                            msg += matches[0].categoryLabel;
+                        } else {
+                            msg += L"multiple types of sensitive data:";
+                            for (const auto& m : matches) {
+                                msg += L"\n  \u2022 ";
+                                msg += m.patternName;
+                            }
+                        }
+                        msg += L"\n\nScreen capture and screen sharing have been "
+                               L"disabled for this browser window by Browser Bridge DLP.";
+                        NotifyUser(std::move(msg));
+                    } else {
+                        // Browser window not yet ready — schedule retry.
+                        struct RetryCtx { DWORD pid; };
+                        auto* pCtx = new RetryCtx{ currentPid };
+
+                        HANDLE hRetry = CreateThread(nullptr, 0,
+                            [](LPVOID param) -> DWORD {
+                                auto* ctx = static_cast<RetryCtx*>(param);
+                                for (int attempt = 0; attempt < 8; ++attempt) {
+                                    Sleep(500);
+                                    const UINT n = ScreenCapture_ProtectProcess(ctx->pid);
+                                    if (n > 0) {
+                                        OutputDebugStringA("[DLP][SCP] Retry: browser window "
+                                                           "found and protected");
+                                        NotifyUser(
+                                            L"Sensitive document protection active.\n\n"
+                                            L"Screen capture and screen sharing have been "
+                                            L"disabled for this browser window by Browser Bridge DLP.");
+                                        break;
+                                    }
+                                }
+                                delete ctx;
+                                return 0;
+                            },
+                            pCtx, 0, nullptr);
+
+                        if (hRetry) CloseHandle(hRetry);
+                        else        delete pCtx;
+                    }
+
+                    // Fall through — let fpCreateFileW open the file normally.
+
                 } else {
                     // ── Uploader/browser policy: block the open ───────────────
                     OutputDebugStringA("[DLP] BLOCKED CreateFileW — sensitive data detected in file");
