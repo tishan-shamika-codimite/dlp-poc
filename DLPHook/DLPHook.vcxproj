@@ -145,7 +145,6 @@
     <ClInclude Include="DlpCommon.h" />
     <ClInclude Include="ClipboardHook.h" />
     <ClInclude Include="FileUploadHook.h" />
-    <ClInclude Include="ScreenCaptureHook.h" />
     <ClInclude Include="Inflate.h" />
     <ClInclude Include="PdfTextExtractor.h" />
   </ItemGroup>
@@ -154,7 +153,6 @@
     <ClCompile Include="DlpCommon.cpp" />
     <ClCompile Include="ClipboardHook.cpp" />
     <ClCompile Include="FileUploadHook.cpp" />
-    <ClCompile Include="ScreenCaptureHook.cpp" />
     <ClCompile Include="Inflate.cpp" />
     <ClCompile Include="PdfTextExtractor.cpp" />
     <ClCompile Include="pch.cpp">
