@@ -3,6 +3,8 @@
 #include "DlpCommon.h"
 #include "PdfTextExtractor.h"
 #include "ScreenCaptureProtection.h"
+#include "DlpIpc.h"           // DlpIpcCategory bitmask
+#include "DlpIpcClient.h"     // Worker → UI IPC send
 #include <string>
 #include <shobjidl.h>
 #include <commdlg.h>   // OPENFILENAMEW, LPOPENFILENAMEW, GetOpenFileNameW
@@ -59,18 +61,37 @@ static bool IsSystemPath(LPCWSTR path) {
     std::wstring lower(path);
     for (auto& c : lower) c = towlower(c);
 
-    return lower.find(L"\\appdata\\")      != std::wstring::npos
-        || lower.find(L"\\program files")  != std::wstring::npos
-        || lower.find(L"\\windows\\")      != std::wstring::npos
-        || lower.find(L"\\programdata\\")  != std::wstring::npos
-        || lower.find(L"\\temp\\")         != std::wstring::npos
-        || lower.find(L"\\tmp\\")          != std::wstring::npos
-        || lower.find(L"\\cache\\")        != std::wstring::npos
-        || lower.find(L"\\node_modules\\") != std::wstring::npos;
+    // ── Genuine system / infrastructure paths — skip scanning ────────────────
+    //
+    //  NOTE: We deliberately do NOT exclude \appdata\ here.
+    //  Adobe Acrobat stores temporary PDF renders and recently-opened documents
+    //  under C:\Users\<name>\AppData\Roaming\Adobe\...  — those ARE user
+    //  documents and must be scanned.  The first line of the debug log
+    //  confirmed Acrobat's working directory is AppData\Roaming.
+    //
+    //  We only exclude paths that are genuinely infrastructure (Windows
+    //  binaries, third-party program files, and OS temp/cache directories
+    //  that never contain user-authored documents).
+
+    return lower.find(L"\\program files")    != std::wstring::npos
+        || lower.find(L"\\program files (x86)") != std::wstring::npos
+        || lower.find(L"\\windows\\")        != std::wstring::npos
+        || lower.find(L"\\programdata\\")    != std::wstring::npos
+        || lower.find(L"\\node_modules\\")   != std::wstring::npos
+        // OS temp dirs only — NOT AppData\Local\Temp under user profile
+        || lower.find(L"\\windows\\temp\\")  != std::wstring::npos
+        || lower.find(L"\\windows\\tmp\\")   != std::wstring::npos;
 }
 
 static bool ShouldScanFile(LPCWSTR path) {
-    return path && HasDocumentExtension(path) && !IsSystemPath(path);
+    if (!path) return false;
+    if (!HasDocumentExtension(path)) return false;
+    if (IsSystemPath(path)) {
+        // Uncomment the line below temporarily to see which paths are filtered:
+        // char buf[512]; wsprintfA(buf,"[DLP][SKIP] system path: %S", path); OutputDebugStringA(buf);
+        return false;
+    }
+    return true;
 }
 
 // Opens a read-only handle via the real CreateFileW, reads full content, closes.
@@ -396,6 +417,45 @@ static bool IsViewerProcess() {
     return IsDedicatedViewerProcess() || IsBrowserViewerProcess();
 }
 
+// ── Worker process detection ──────────────────────────────────────────────────
+//
+//  "Worker" processes are sandboxed sub-processes that cannot call
+//  SetWindowDisplayAffinity on their own (their windows are owned by the
+//  parent UI process).  When running inside a worker, the DLL must route
+//  screen-capture enforcement requests through the IPC client instead of
+//  calling ScreenCapture_ProtectProcess() directly.
+//
+//  Detection heuristic: Chrome renderer / utility processes pass a
+//  --type=<renderer|utility|gpu-process> command-line argument.
+//  AcroCEF processes are named "AcroCEF.exe" or "acrocef_1.exe".
+//  All other processes (the main browser/app window) are treated as UI procs.
+
+static bool IsWorkerProcess() {
+    // ── AcroCEF worker processes ──────────────────────────────────────────────
+    static const wchar_t* kCefWorkers[] = {
+        L"acrocef.exe",
+        L"acrocef_1.exe",
+        L"acrobatnotification.exe",
+    };
+    const wchar_t* exe = GetCurrentExeName();
+    for (const auto* name : kCefWorkers)
+        if (wcscmp(exe, name) == 0) return true;
+
+    // ── Chrome / Edge / Brave renderer detection via command line ────────────
+    //  Chrome passes --type=renderer (or gpu-process, utility, etc.) to
+    //  sub-processes.  The browser (UI) process has no --type argument.
+    if (IsBrowserViewerProcess()) {
+        const wchar_t* cmdLine = GetCommandLineW();
+        if (cmdLine) {
+            // Look for --type= which is present in all non-browser Chrome processes
+            if (wcsstr(cmdLine, L"--type=") != nullptr)
+                return true;
+        }
+    }
+
+    return false;
+}
+
 // ── Hook 3: CreateFileW ───────────────────────────────────────────────────────
 //
 //  Two distinct policies depending on the calling process:
@@ -432,6 +492,10 @@ static HANDLE WINAPI Detour_CreateFileW(
         && dwCreationDisposition == OPEN_EXISTING
         && ShouldScanFile(lpFileName))
     {
+        char dbg[512];
+        wsprintfA(dbg, "[DLP][CreateFileW] Scanning: %S", lpFileName);
+        OutputDebugStringA(dbg);
+
         // Scan using the real CreateFileW (fpCreateFileW) via ReadFileContent
         const std::string content = ReadFileContent(lpFileName);
         if (!content.empty()) {
@@ -444,63 +508,95 @@ static HANDLE WINAPI Detour_CreateFileW(
                 if (IsDedicatedViewerProcess()) {
                     // ── Dedicated viewer policy: allow open + arm screen-capture ──
                     //
-                    // We allow the file to open so the viewer renders it normally,
-                    // but we immediately apply WDA_EXCLUDEFROMCAPTURE to every
-                    // window belonging to this process.
-                    OutputDebugStringA("[DLP] Sensitive content detected in dedicated viewer — "
-                                       "open allowed, arming screen-capture protection");
+                    // For AcroCEF workers (sandboxed sub-process of Acrobat), we
+                    // route through IPC just like browser renderers.
+                    // For the main Acrobat.exe process, we protect directly.
 
-                    const DWORD currentPid = GetCurrentProcessId();
-                    const UINT  protected_ = ScreenCapture_ProtectProcess(currentPid);
-
-                    if (protected_ > 0) {
-                        std::wstring msg =
-                            L"Sensitive document protection active.\n\n"
-                            L"This document contains ";
-                        if (matches.size() == 1) {
-                            msg += matches[0].categoryLabel;
-                        } else {
-                            msg += L"multiple types of sensitive data:";
-                            for (const auto& m : matches) {
-                                msg += L"\n  \u2022 ";
-                                msg += m.patternName;
-                            }
+                    // Build DlpIpcCategory bitmask
+                    uint32_t categories = 0;
+                    for (const auto& m : matches) {
+                        switch (m.category) {
+                        case DlpCategory::PCI:       categories |= static_cast<uint32_t>(DlpIpcCategory::PCI);       break;
+                        case DlpCategory::PII:       categories |= static_cast<uint32_t>(DlpIpcCategory::PII);       break;
+                        case DlpCategory::PHI:       categories |= static_cast<uint32_t>(DlpIpcCategory::PHI);       break;
+                        case DlpCategory::Financial: categories |= static_cast<uint32_t>(DlpIpcCategory::Financial); break;
+                        default: break;
                         }
-                        msg += L"\n\nScreen capture and screen sharing have been "
-                               L"disabled for this window by Browser Bridge DLP.";
-                        NotifyUser(std::move(msg));
+                    }
+
+                    if (IsWorkerProcess()) {
+                        // ── AcroCEF sandboxed worker: delegate via IPC ────────
+                        OutputDebugStringA("[DLP] Sensitive content in AcroCEF WORKER — "
+                                           "routing to Acrobat UI process via IPC");
+
+                        const BOOL ipcOk = DlpIpcClient_NotifySensitiveFileOpened(
+                            categories, lpFileName);
+
+                        if (!ipcOk) {
+                            // Fail-closed: deny the open if IPC delegation failed
+                            OutputDebugStringA("[DLP] FAIL-CLOSED: IPC to Acrobat UI failed — "
+                                               "blocking file open in AcroCEF worker");
+                            SetLastError(ERROR_ACCESS_DENIED);
+                            return INVALID_HANDLE_VALUE;
+                        }
+                        // IPC OK — Acrobat UI process has armed protection.
+
                     } else {
-                        // Window not visible yet — schedule a retry on a background
-                        // thread (covers slow Acrobat startup paths).
-                        struct RetryCtx {
-                            DWORD pid;
-                            std::vector<DlpMatch> matches;
-                        };
-                        auto* pCtx = new RetryCtx{ currentPid, matches };
+                        // ── Main Acrobat.exe UI process: protect directly ─────
+                        OutputDebugStringA("[DLP] Sensitive content detected in dedicated viewer — "
+                                           "open allowed, arming screen-capture protection");
 
-                        HANDLE hRetry = CreateThread(nullptr, 0,
-                            [](LPVOID param) -> DWORD {
-                                auto* ctx = static_cast<RetryCtx*>(param);
-                                for (int attempt = 0; attempt < 8; ++attempt) {
-                                    Sleep(500);
-                                    const UINT n = ScreenCapture_ProtectProcess(ctx->pid);
-                                    if (n > 0) {
-                                        OutputDebugStringA("[DLP][SCP] Retry: process window "
-                                                           "found and protected");
-                                        NotifyUser(
-                                            L"Sensitive document protection active.\n\n"
-                                            L"Screen capture and screen sharing have been "
-                                            L"disabled for this window by Browser Bridge DLP.");
-                                        break;
-                                    }
+                        const DWORD currentPid = GetCurrentProcessId();
+                        const UINT  protected_ = ScreenCapture_ProtectProcess(currentPid);
+
+                        if (protected_ > 0) {
+                            std::wstring msg =
+                                L"Sensitive document protection active.\n\n"
+                                L"This document contains ";
+                            if (matches.size() == 1) {
+                                msg += matches[0].categoryLabel;
+                            } else {
+                                msg += L"multiple types of sensitive data:";
+                                for (const auto& m : matches) {
+                                    msg += L"\n  \u2022 ";
+                                    msg += m.patternName;
                                 }
-                                delete ctx;
-                                return 0;
-                            },
-                            pCtx, 0, nullptr);
+                            }
+                            msg += L"\n\nScreen capture and screen sharing have been "
+                                   L"disabled for this window by Browser Bridge DLP.";
+                            NotifyUser(std::move(msg));
+                        } else {
+                            // Window not visible yet — retry on a background thread
+                            struct RetryCtx {
+                                DWORD pid;
+                                std::vector<DlpMatch> matches;
+                            };
+                            auto* pCtx = new RetryCtx{ currentPid, matches };
 
-                        if (hRetry) CloseHandle(hRetry);
-                        else        delete pCtx;
+                            HANDLE hRetry = CreateThread(nullptr, 0,
+                                [](LPVOID param) -> DWORD {
+                                    auto* ctx = static_cast<RetryCtx*>(param);
+                                    for (int attempt = 0; attempt < 8; ++attempt) {
+                                        Sleep(500);
+                                        const UINT n = ScreenCapture_ProtectProcess(ctx->pid);
+                                        if (n > 0) {
+                                            OutputDebugStringA("[DLP][SCP] Retry: process window "
+                                                               "found and protected");
+                                            NotifyUser(
+                                                L"Sensitive document protection active.\n\n"
+                                                L"Screen capture and screen sharing have been "
+                                                L"disabled for this window by Browser Bridge DLP.");
+                                            break;
+                                        }
+                                    }
+                                    delete ctx;
+                                    return 0;
+                                },
+                                pCtx, 0, nullptr);
+
+                            if (hRetry) CloseHandle(hRetry);
+                            else        delete pCtx;
+                        }
                     }
 
                     // Fall through — let fpCreateFileW open the file normally.
@@ -513,65 +609,102 @@ static HANDLE WINAPI Detour_CreateFileW(
                     // browser, so we ALLOW the read (blocking it would show a
                     // broken PDF tab, not a useful DLP message).
                     //
-                    // However, we must protect the browser's windows so that
-                    // Win+Shift+S, PrintScreen, and screen-sharing apps (Teams,
-                    // Zoom, OBS) cannot capture the sensitive content rendered in
-                    // the browser tab.
+                    // WORKER vs UI PATH:
+                    //   Worker (renderer, gpu-process, --type= present):
+                    //     Cannot call SetWindowDisplayAffinity — sandboxed.
+                    //     Delegate to the IPC client; the UI-process server will
+                    //     apply WDA_EXCLUDEFROMCAPTURE on the browser's HWNDs.
+                    //     Fail-closed: if IPC fails, DENY the file open so we
+                    //     never silently allow unprotected sensitive-data reads.
                     //
-                    // Chrome architecture: every process in the Chrome family
-                    // (browser, renderer, GPU, utility) is named "chrome.exe".
-                    // We protect ALL top-level + child windows for this PID, which
-                    // covers the renderer process that actually paints the PDF tab.
-                    OutputDebugStringA("[DLP] Sensitive content detected in browser viewer — "
-                                       "open allowed, arming screen-capture protection on browser");
+                    //   UI process (main browser, no --type= arg):
+                    //     Owns the HWNDs — protect directly.
 
-                    const DWORD currentPid = GetCurrentProcessId();
-                    const UINT  protected_ = ScreenCapture_ProtectProcess(currentPid);
-
-                    if (protected_ > 0) {
-                        std::wstring msg =
-                            L"Sensitive document protection active.\n\n"
-                            L"This PDF contains ";
-                        if (matches.size() == 1) {
-                            msg += matches[0].categoryLabel;
-                        } else {
-                            msg += L"multiple types of sensitive data:";
-                            for (const auto& m : matches) {
-                                msg += L"\n  \u2022 ";
-                                msg += m.patternName;
-                            }
+                    // Build the DlpIpcCategory bitmask from the DlpMatch results
+                    uint32_t categories = 0;
+                    for (const auto& m : matches) {
+                        switch (m.category) {
+                        case DlpCategory::PCI:       categories |= static_cast<uint32_t>(DlpIpcCategory::PCI);       break;
+                        case DlpCategory::PII:       categories |= static_cast<uint32_t>(DlpIpcCategory::PII);       break;
+                        case DlpCategory::PHI:       categories |= static_cast<uint32_t>(DlpIpcCategory::PHI);       break;
+                        case DlpCategory::Financial: categories |= static_cast<uint32_t>(DlpIpcCategory::Financial); break;
+                        default: break;
                         }
-                        msg += L"\n\nScreen capture and screen sharing have been "
-                               L"disabled for this browser window by Browser Bridge DLP.";
-                        NotifyUser(std::move(msg));
+                    }
+
+                    if (IsWorkerProcess()) {
+                        // ── Sandboxed worker path: IPC → UI process ───────────
+                        OutputDebugStringA("[DLP] Sensitive content in browser WORKER — "
+                                           "routing to UI process via IPC");
+
+                        const BOOL ipcOk = DlpIpcClient_NotifySensitiveFileOpened(
+                            categories, lpFileName);
+
+                        if (!ipcOk) {
+                            // IPC failed or UI process returned Nack.
+                            // Fail-closed: deny the file open to prevent
+                            // unprotected access to sensitive content.
+                            OutputDebugStringA("[DLP] FAIL-CLOSED: IPC send failed or Nack — "
+                                               "blocking file open in worker");
+                            SetLastError(ERROR_ACCESS_DENIED);
+                            return INVALID_HANDLE_VALUE;
+                        }
+                        // IPC succeeded — UI process has armed protection.
+                        // Allow the renderer to open and render the file.
+
                     } else {
-                        // Browser window not yet ready — schedule retry.
-                        struct RetryCtx { DWORD pid; };
-                        auto* pCtx = new RetryCtx{ currentPid };
+                        // ── UI / main browser process path: direct protection ──
+                        OutputDebugStringA("[DLP] Sensitive content detected in browser UI — "
+                                           "open allowed, arming screen-capture protection on browser");
 
-                        HANDLE hRetry = CreateThread(nullptr, 0,
-                            [](LPVOID param) -> DWORD {
-                                auto* ctx = static_cast<RetryCtx*>(param);
-                                for (int attempt = 0; attempt < 8; ++attempt) {
-                                    Sleep(500);
-                                    const UINT n = ScreenCapture_ProtectProcess(ctx->pid);
-                                    if (n > 0) {
-                                        OutputDebugStringA("[DLP][SCP] Retry: browser window "
-                                                           "found and protected");
-                                        NotifyUser(
-                                            L"Sensitive document protection active.\n\n"
-                                            L"Screen capture and screen sharing have been "
-                                            L"disabled for this browser window by Browser Bridge DLP.");
-                                        break;
-                                    }
+                        const DWORD currentPid = GetCurrentProcessId();
+                        const UINT  protected_ = ScreenCapture_ProtectProcess(currentPid);
+
+                        if (protected_ > 0) {
+                            std::wstring msg =
+                                L"Sensitive document protection active.\n\n"
+                                L"This PDF contains ";
+                            if (matches.size() == 1) {
+                                msg += matches[0].categoryLabel;
+                            } else {
+                                msg += L"multiple types of sensitive data:";
+                                for (const auto& m : matches) {
+                                    msg += L"\n  \u2022 ";
+                                    msg += m.patternName;
                                 }
-                                delete ctx;
-                                return 0;
-                            },
-                            pCtx, 0, nullptr);
+                            }
+                            msg += L"\n\nScreen capture and screen sharing have been "
+                                   L"disabled for this browser window by Browser Bridge DLP.";
+                            NotifyUser(std::move(msg));
+                        } else {
+                            // Browser window not yet ready — schedule retry.
+                            struct RetryCtx { DWORD pid; };
+                            auto* pCtx = new RetryCtx{ currentPid };
 
-                        if (hRetry) CloseHandle(hRetry);
-                        else        delete pCtx;
+                            HANDLE hRetry = CreateThread(nullptr, 0,
+                                [](LPVOID param) -> DWORD {
+                                    auto* ctx = static_cast<RetryCtx*>(param);
+                                    for (int attempt = 0; attempt < 8; ++attempt) {
+                                        Sleep(500);
+                                        const UINT n = ScreenCapture_ProtectProcess(ctx->pid);
+                                        if (n > 0) {
+                                            OutputDebugStringA("[DLP][SCP] Retry: browser window "
+                                                               "found and protected");
+                                            NotifyUser(
+                                                L"Sensitive document protection active.\n\n"
+                                                L"Screen capture and screen sharing have been "
+                                                L"disabled for this browser window by Browser Bridge DLP.");
+                                            break;
+                                        }
+                                    }
+                                    delete ctx;
+                                    return 0;
+                                },
+                                pCtx, 0, nullptr);
+
+                            if (hRetry) CloseHandle(hRetry);
+                            else        delete pCtx;
+                        }
                     }
 
                     // Fall through — let fpCreateFileW open the file normally.

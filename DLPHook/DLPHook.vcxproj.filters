@@ -13,6 +13,12 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Source Files\IPC">
+      <UniqueIdentifier>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\IPC">
+      <UniqueIdentifier>{B2C3D4E5-F6A7-8901-BCDE-F12345678901}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="framework.h">
@@ -23,6 +29,15 @@
     </ClInclude>
     <ClInclude Include="DlpCommon.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DlpIpc.h">
+      <Filter>Header Files\IPC</Filter>
+    </ClInclude>
+    <ClInclude Include="DlpIpcServer.h">
+      <Filter>Header Files\IPC</Filter>
+    </ClInclude>
+    <ClInclude Include="DlpIpcClient.h">
+      <Filter>Header Files\IPC</Filter>
     </ClInclude>
     <ClInclude Include="ClipboardHook.h">
       <Filter>Header Files</Filter>
@@ -49,6 +64,15 @@
     </ClCompile>
     <ClCompile Include="DlpCommon.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="DlpIpc.cpp">
+      <Filter>Source Files\IPC</Filter>
+    </ClCompile>
+    <ClCompile Include="DlpIpcServer.cpp">
+      <Filter>Source Files\IPC</Filter>
+    </ClCompile>
+    <ClCompile Include="DlpIpcClient.cpp">
+      <Filter>Source Files\IPC</Filter>
     </ClCompile>
     <ClCompile Include="ClipboardHook.cpp">
       <Filter>Source Files</Filter>

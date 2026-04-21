@@ -45,27 +45,8 @@ DWORD WINAPI ServiceCtrlHandler(DWORD dwControl, DWORD /*dwEventType*/,
     }
 }
 
-// ── Debug privilege ───────────────────────────────────────────────────────────
-
-bool EnableDebugPrivilege() {
-    HANDLE hToken = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(),
-                          TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
-        return false;
-
-    TOKEN_PRIVILEGES tp = {};
-    tp.PrivilegeCount = 1;
-    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-
-    if (!LookupPrivilegeValueW(nullptr, SE_DEBUG_NAME, &tp.Privileges[0].Luid)) {
-        CloseHandle(hToken);
-        return false;
-    }
-
-    const BOOL ok = AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(tp), nullptr, nullptr);
-    CloseHandle(hToken);
-    return ok && GetLastError() == ERROR_SUCCESS;
-}
+// EnableDebugPrivilege is defined in InjectionEngine.cpp (single definition rule).
+// It is declared in InjectionEngine.h which ServiceMain.h includes transitively.
 
 // ── ServiceMain — called by SCM ───────────────────────────────────────────────
 

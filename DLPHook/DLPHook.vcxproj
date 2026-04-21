@@ -143,6 +143,9 @@
     <ClInclude Include="pch.h" />
     <ClInclude Include="minhook-src\include\MinHook.h" />
     <ClInclude Include="DlpCommon.h" />
+    <ClInclude Include="DlpIpc.h" />
+    <ClInclude Include="DlpIpcServer.h" />
+    <ClInclude Include="DlpIpcClient.h" />
     <ClInclude Include="ClipboardHook.h" />
     <ClInclude Include="FileUploadHook.h" />
     <ClInclude Include="Inflate.h" />
@@ -152,6 +155,9 @@
   <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="DlpCommon.cpp" />
+    <ClCompile Include="DlpIpc.cpp" />
+    <ClCompile Include="DlpIpcServer.cpp" />
+    <ClCompile Include="DlpIpcClient.cpp" />
     <ClCompile Include="ClipboardHook.cpp" />
     <ClCompile Include="FileUploadHook.cpp" />
     <ClCompile Include="Inflate.cpp" />
