@@ -51,5 +51,5 @@ UpgradeLog.htm
 .opencode/
 
 # Extension Files
-browser-extension/node_modules/
-browser-extension/dist/
+BrowserExtension/node_modules/
+BrowserExtension/dist/
