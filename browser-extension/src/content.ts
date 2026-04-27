@@ -75,7 +75,7 @@ function createOverlay(): HTMLDivElement {
   const sub = document.createElement('p');
   sub.textContent =
     'This page contains sensitive information. Its content has been hidden ' +
-    'because an active screen sharing session was detected (Zoom / Teams).';
+    'because an active screen sharing session was detected.';
   Object.assign(sub.style, {
     fontSize:   '15px',
     maxWidth:   '520px',
@@ -181,12 +181,15 @@ chrome.runtime.onMessage.addListener((message: ContentMessage) => {
   }
 });
 
-// ── On load: check if sharing is already active ───────────────────────────────
+// ── On load: check if sharing is already active AND this tab is sensitive ──────
 // Handles the case where a new tab is opened during an ongoing share session.
+// We ask the background for both the sharing state AND whether the current URL
+// is a protected domain — the content script must not self-apply the overlay on
+// non-sensitive pages (YouTube, Facebook, etc.) even when sharing is active.
 
-chrome.runtime.sendMessage({ action: 'getStatus' }, (response) => {
+chrome.runtime.sendMessage({ action: 'getStatusForTab' }, (response) => {
   if (chrome.runtime.lastError) return; // background not ready yet
-  if (response?.sharing === true) {
+  if (response?.sharing === true && response?.sensitive === true) {
     // Wait for DOM to be ready before injecting overlay
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', showOverlay, { once: true });

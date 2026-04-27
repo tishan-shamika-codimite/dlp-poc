@@ -10,7 +10,8 @@
     "rootDir": "./src",
     "sourceMap": true,
     "esModuleInterop": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["chrome"]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

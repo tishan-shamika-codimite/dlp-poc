@@ -133,10 +133,23 @@ function scheduleReconnect(): void {
 // ── Extension message handler ─────────────────────────────────────────────────
 // Handles messages from popup.ts and content scripts.
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'getStatus') {
     sendResponse({ sharing: isSharingActive });
     return true;
+  }
+
+  // Called by content scripts on load to check if they specifically should show
+  // the overlay. Returns both the sharing state AND whether the sender tab's URL
+  // is a protected domain — prevents non-sensitive tabs (YouTube, Facebook, etc.)
+  // from self-applying the overlay when sharing is active.
+  if (message.action === 'getStatusForTab') {
+    getSettings().then((settings) => {
+      const url = sender.tab?.url ?? '';
+      const sensitive = settings.enabled && isSensitiveUrl(url, settings.blockedDomains);
+      sendResponse({ sharing: isSharingActive, sensitive });
+    });
+    return true; // async response
   }
 
   if (message.action === 'getSettings') {
