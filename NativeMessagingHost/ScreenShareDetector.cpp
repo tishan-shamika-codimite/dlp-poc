@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <cwchar>
+#include <psapi.h>
 
 // ── Shared state ──────────────────────────────────────────────────────────────
 
@@ -37,6 +38,29 @@ static int64_t NowMs() {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Returns the executable filename (e.g. L"slack.exe") of the process that owns
+// the given window handle.  Used to confirm process ownership before acting on
+// generic window class names (e.g. SingleWindowBorderClass, Chrome_WidgetWin_1)
+// that could appear in non-Slack processes.
+// Returns an empty wstring if the process cannot be queried (e.g. access denied).
+static std::wstring GetWindowProcessName(HWND hwnd) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == 0) return {};
+
+    HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!hProc) return {};
+
+    wchar_t path[MAX_PATH] = {};
+    DWORD len = MAX_PATH;
+    QueryFullProcessImageNameW(hProc, 0, path, &len);
+    CloseHandle(hProc);
+
+    // Extract just the filename component from the full path.
+    const wchar_t* slash = wcsrchr(path, L'\\');
+    return slash ? std::wstring(slash + 1) : std::wstring(path);
+}
 
 static bool IsProcessRunning(const wchar_t* name) {
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -78,6 +102,16 @@ static bool IsProcessRunning(const wchar_t* name) {
 //   "ZPFloatToolbarClass"  [Zoom.exe]  title="Screen sharing meeting controls"
 //       The floating toolbar shown to the sharer.  Only visible during an active
 //       share.  Verified via live capture: absent entirely when not sharing.
+//
+//   "SingleWindowBorderClass"  [slack.exe]  title="Transparent Window"
+//       Slack's (Electron) screen-share border/frame overlay window.
+//       EXISTS in both idle and sharing states (owned by the Slack main PID)
+//       but IsWindowVisible() returns TRUE ONLY during an active screen share.
+//       Process ownership check against slack.exe is mandatory — the class name
+//       is generic and could theoretically appear in other applications.
+//       Verified by live window enumeration (find-slack-sharing.ps1):
+//         Idle:    SingleWindowBorderClass  vis=False  title="Transparent Window"
+//         Sharing: SingleWindowBorderClass  vis=True   title="Transparent Window"
 //
 // ── Explicitly excluded (verified vis=True in BOTH sharing and not-sharing) ────
 //   VideoFrameWndClass  — vis=True in both states; NOT a reliable signal.
@@ -154,6 +188,23 @@ static BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
         }
     }
 
+    // ── Slack (Electron) — Tier-1: SingleWindowBorderClass visibility flip ────
+    //
+    // "Transparent Window" (class SingleWindowBorderClass) is owned by
+    // slack.exe in BOTH idle and sharing states, but IsWindowVisible() returns
+    // TRUE only while a screen share is actively in progress.
+    //
+    // Process ownership is verified via GetWindowProcessName() to prevent false
+    // positives from any other application that happens to use the same generic
+    // window class name.
+    if (_wcsicmp(cls, L"SingleWindowBorderClass") == 0 && IsWindowVisible(hwnd)) {
+        std::wstring owner = GetWindowProcessName(hwnd);
+        if (_wcsicmp(owner.c_str(), L"slack.exe") == 0) {
+            reinterpret_cast<EnumState*>(lParam)->sharing = true;
+            return FALSE; // stop enumeration
+        }
+    }
+
     return TRUE; // continue enumeration
 }
 
@@ -172,6 +223,7 @@ static bool DetectViaProcessAndWindows() {
         L"ms-teams.exe", // Microsoft Teams (classic)
         L"Teams.exe",    // Microsoft Teams (alternate name)
         L"msteams.exe",  // Microsoft Teams (another variant)
+        L"slack.exe",    // Slack desktop app (Electron)
     };
     bool anyRunning = false;
     for (const wchar_t* name : kTargets) {
