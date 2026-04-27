@@ -12,6 +12,22 @@ export interface ContentMessage {
   active: boolean;
 }
 
+/**
+ * Message sent from content script → background service worker.
+ * Covers both the standard query actions and the new browser-share signals
+ * forwarded from inject.ts via window.postMessage.
+ */
+export interface BackgroundMessage {
+  action:
+    | 'getStatus'
+    | 'getStatusForTab'
+    | 'getSettings'
+    | 'saveSettings'
+    | 'browserShareStarted'   // inject.ts detected getDisplayMedia stream granted
+    | 'browserShareStopped';  // inject.ts detected all video tracks ended
+  settings?: DlpSettings;
+}
+
 /** Stored extension settings */
 export interface DlpSettings {
   /** List of hostname patterns to protect (e.g. "mail.google.com", "github.com") */

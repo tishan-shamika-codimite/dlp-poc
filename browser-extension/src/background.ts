@@ -5,8 +5,10 @@
  *  1. Connect to NativeMessagingHost ("com.dlp.screenshare") and maintain the connection.
  *  2. On screenshare active:  send blur  message to all tabs matching blocked domains.
  *  3. On screenshare stopped: send unblur message to all tabs.
- *  4. Expose storage API for domain list management (popup.ts reads/writes this).
- *  5. Handle messages from content scripts (e.g. ready ping).
+ *  4. Handle browser-based screen share signals from inject.ts via content.ts
+ *     (getDisplayMedia interception — covers Google Meet, Zoom web, Teams web, etc.)
+ *  5. Expose storage API for domain list management (popup.ts reads/writes this).
+ *  6. Handle messages from content scripts (e.g. ready ping).
  */
 
 import { NativeMessage, ContentMessage, DlpSettings, DEFAULT_SETTINGS } from './types';
@@ -21,7 +23,21 @@ const MAX_RECONNECT_DELAY_MS = 30000;
 
 let nativePort: chrome.runtime.Port | null = null;
 let reconnectDelay = RECONNECT_DELAY_MS;
+
+// Set by the native host when Zoom / Teams desktop app is sharing.
 let isSharingActive = false;
+
+// Set by inject.ts (via content.ts postMessage bridge) when any browser-based
+// meeting (Google Meet, Zoom web, Teams web, etc.) calls getDisplayMedia.
+let isBrowserSharingActive = false;
+
+// ── Combined sharing state ────────────────────────────────────────────────────
+// Returns true if EITHER native desktop sharing OR browser-based sharing is on.
+// Overlay should be shown when this is true and cleared only when both are false.
+
+function isAnyShareActive(): boolean {
+  return isSharingActive || isBrowserSharingActive;
+}
 
 // ── Settings helpers ──────────────────────────────────────────────────────────
 
@@ -114,8 +130,11 @@ function connectToHost(): void {
     if (msg.type === 'screenshare' && typeof msg.active === 'boolean') {
       if (msg.active !== isSharingActive) {
         isSharingActive = msg.active;
-        console.log('[DLP] Screen share state changed:', isSharingActive);
-        broadcastToSensitiveTabs(isSharingActive);
+        console.log('[DLP] Native screen share state changed:', isSharingActive);
+        // Only broadcast unblur if browser-based share is also not active.
+        if (msg.active || !isBrowserSharingActive) {
+          broadcastToSensitiveTabs(isAnyShareActive());
+        }
       }
     }
 
@@ -134,10 +153,13 @@ function connectToHost(): void {
     console.warn('[DLP] Native host disconnected:', err?.message ?? 'unknown reason');
     nativePort = null;
 
-    // If sharing was active and host died, unblur all tabs for safety
+    // If native sharing was active and host died, clear it — but only unblur
+    // if browser-based sharing is also not active.
     if (isSharingActive) {
       isSharingActive = false;
-      broadcastToSensitiveTabs(false);
+      if (!isBrowserSharingActive) {
+        broadcastToSensitiveTabs(false);
+      }
     }
 
     scheduleReconnect();
@@ -156,38 +178,68 @@ function scheduleReconnect(): void {
 }
 
 // ── Extension message handler ─────────────────────────────────────────────────
-// Handles messages from popup.ts and content scripts.
+// Handles messages from popup.ts, content scripts, and the postMessage bridge
+// in content.ts that forwards signals from inject.ts (getDisplayMedia intercept).
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+
+  // ── Status queries ──────────────────────────────────────────────────────────
+
   if (message.action === 'getStatus') {
-    sendResponse({ sharing: isSharingActive });
+    sendResponse({ sharing: isAnyShareActive() });
     return true;
   }
 
-  // Called by content scripts on load to check if they specifically should show
-  // the overlay. Returns both the sharing state AND whether the sender tab's URL
-  // is a protected domain — prevents non-sensitive tabs (YouTube, Facebook, etc.)
-  // from self-applying the overlay when sharing is active.
+  // Called by content scripts on load. Returns both the combined sharing state
+  // AND whether the sender tab's URL is a protected domain — prevents
+  // non-sensitive tabs (YouTube, Facebook, etc.) from showing the overlay.
   if (message.action === 'getStatusForTab') {
     getSettings().then((settings) => {
       const url = sender.tab?.url ?? '';
       const sensitive = settings.enabled && isSensitiveUrl(url, settings.blockedDomains);
-      sendResponse({ sharing: isSharingActive, sensitive });
+      sendResponse({ sharing: isAnyShareActive(), sensitive });
     });
     return true; // async response
   }
 
+  // ── Settings ────────────────────────────────────────────────────────────────
+
   if (message.action === 'getSettings') {
     getSettings().then((s) => sendResponse(s));
-    return true; // async response
+    return true;
   }
 
   if (message.action === 'saveSettings') {
     saveSettings(message.settings as DlpSettings).then(() => {
       sendResponse({ ok: true });
-      // Re-broadcast current state with new settings
-      broadcastToSensitiveTabs(isSharingActive);
+      // Re-broadcast current combined state with the new domain list.
+      broadcastToSensitiveTabs(isAnyShareActive());
     });
+    return true;
+  }
+
+  // ── Browser-based screen share (getDisplayMedia interception) ───────────────
+  // These messages are sent by content.ts, which bridges window.postMessage
+  // events from inject.ts (running in the page's main JS world).
+
+  if (message.action === 'browserShareStarted') {
+    if (!isBrowserSharingActive) {
+      isBrowserSharingActive = true;
+      console.log('[DLP] Browser screen share started (getDisplayMedia granted)');
+      broadcastToSensitiveTabs(true);
+    }
+    return true;
+  }
+
+  if (message.action === 'browserShareStopped') {
+    if (isBrowserSharingActive) {
+      isBrowserSharingActive = false;
+      console.log('[DLP] Browser screen share stopped');
+      // Only unblur if native Zoom/Teams share is also not active.
+      if (!isSharingActive) {
+        broadcastToSensitiveTabs(false);
+      }
+    }
     return true;
   }
 
@@ -195,11 +247,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // ── Tab navigation listener ───────────────────────────────────────────────────
-// When a tab navigates to a sensitive page during an active share, blur it immediately.
+// When a tab navigates to a sensitive page during any active share, blur it.
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete') return;
-  if (!isSharingActive) return;
+  if (!isAnyShareActive()) return;
   if (!tab.url) return;
 
   const settings = await getSettings();

@@ -175,7 +175,7 @@ function startOverlayGuard(): void {
       injectOverlayNode(
         'Content Hidden — Screen Share Detected',
         'This page contains sensitive information. Its content has been hidden ' +
-        'because an active screen sharing session was detected (Zoom / Teams).',
+        'because an active screen sharing session was detected.',
         'Stop screen sharing to restore access to this page.',
       );
     }
@@ -202,7 +202,7 @@ function showOverlay(): void {
   injectOverlayNode(
     'Content Hidden — Screen Share Detected',
     'This page contains sensitive information. Its content has been hidden ' +
-    'because an active screen sharing session was detected (Zoom / Teams).',
+    'because an active screen sharing session was detected.',
     'Stop screen sharing to restore access to this page.',
   );
   document.documentElement.style.overflow = 'hidden';
@@ -306,6 +306,30 @@ chrome.runtime.onMessage.addListener((message: ContentMessage) => {
     } else {
       hideScreenshotFlash();
     }
+  }
+});
+
+// ── Browser screen share bridge (getDisplayMedia interception) ────────────────
+//
+// inject.ts runs in the page's main JS world and wraps getDisplayMedia.
+// It cannot call chrome.runtime directly, so it uses window.postMessage.
+// We listen here (isolated world, has chrome.runtime access) and forward
+// the signals to background.ts which applies the overlay to sensitive tabs.
+//
+// Security guard: e.source !== window rejects messages from iframes or
+// cross-origin windows so a malicious embedded page cannot spoof share events.
+// We also check e.data.source === 'dlp-inject' as a secondary identifier.
+
+window.addEventListener('message', (e: MessageEvent) => {
+  if (e.source !== window) return; // same-frame only
+  if (!e.data || e.data.source !== 'dlp-inject') return; // only our inject script
+
+  if (e.data.type === 'DLP_SHARE_STARTED') {
+    console.log('[DLP] Browser screen share started — forwarding to background');
+    chrome.runtime.sendMessage({ action: 'browserShareStarted' }).catch(() => {});
+  } else if (e.data.type === 'DLP_SHARE_STOPPED') {
+    console.log('[DLP] Browser screen share stopped — forwarding to background');
+    chrome.runtime.sendMessage({ action: 'browserShareStopped' }).catch(() => {});
   }
 });
 

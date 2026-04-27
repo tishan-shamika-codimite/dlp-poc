@@ -6,6 +6,7 @@ module.exports = {
     background: './src/background.ts',
     content:    './src/content.ts',
     popup:      './src/popup.ts',
+    inject:     './src/inject.ts',   // main-world script — wraps getDisplayMedia
   },
   module: {
     rules: [
