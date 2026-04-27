@@ -1,5 +1,6 @@
 #include "JsonMessage.h"
 #include "ScreenShareDetector.h"
+#include "ScreenshotDetector.h"
 #include "RegistrySetup.h"
 #include <windows.h>
 #include <fcntl.h>
@@ -17,6 +18,11 @@ static std::atomic<bool> g_running{ true };
 
 static std::string MakeScreenShareMsg(bool active) {
     return std::string("{\"type\":\"screenshare\",\"active\":") +
+           (active ? "true" : "false") + "}";
+}
+
+static std::string MakeScreenshotMsg(bool active) {
+    return std::string("{\"type\":\"screenshot\",\"active\":") +
            (active ? "true" : "false") + "}";
 }
 
@@ -84,16 +90,24 @@ int wmain(int argc, wchar_t* argv[]) {
     // ── Start screen share detection ──────────────────────────────────────────
     ScreenShareDetector_Start();
 
+    // ── Start screenshot detection ────────────────────────────────────────────
+    // Pass a notify callback so detections fire immediately to the browser
+    // without waiting for the poll loop — eliminates all keypress latency.
+    ScreenshotDetector_Start([](bool active) {
+        NM_WriteMessage(MakeScreenshotMsg(active));
+    });
+
     // ── Start stdin reader thread ─────────────────────────────────────────────
     std::thread reader(StdinReaderThread);
 
     // ── Main message loop ─────────────────────────────────────────────────────
-    // Poll detection state and send updates to extension on state change.
+    // Polls screen-share detection state and sends updates on change.
+    // Screenshot state is pushed immediately via the notify callback above —
+    // no polling needed here for screenshots.
     bool lastState = false;
 
     while (g_running.load()) {
         bool current = ScreenShareDetector_IsSharing();
-
         if (current != lastState) {
             lastState = current;
             NM_WriteMessage(MakeScreenShareMsg(current));
@@ -104,6 +118,7 @@ int wmain(int argc, wchar_t* argv[]) {
 
     // ── Cleanup ───────────────────────────────────────────────────────────────
     ScreenShareDetector_Stop();
+    ScreenshotDetector_Stop();
 
     if (reader.joinable())
         reader.join();

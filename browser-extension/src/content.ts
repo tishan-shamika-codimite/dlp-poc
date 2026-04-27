@@ -5,6 +5,19 @@
  * and overlays the page with a warning when screen sharing is detected on a
  * sensitive domain.
  *
+ * Also handles screenshot attempt detection:
+ *  - Native host (NativeMessagingHost.exe) detects Win+Shift+S, Snipping Tool,
+ *    PrintScreen, clipboard image writes, and known screenshot processes, then
+ *    sends screenshot-flash active:true/false messages via background.ts.
+ *  - Overlay stays up the entire time a screenshot process is open (active:true),
+ *    and hides only when active:false is received (process exited).
+ *  - A browser-side PrintScreen keydown listener acts as a timed fallback
+ *    when the native host is not running.
+ *
+ * Two independent overlay states:
+ *  overlayActive       — persistent, driven by screen-share detection
+ *  screenshotOverlayOn — held while screenshot process is running
+ *
  * The overlay is a full-viewport fixed <div> that:
  *  - Blocks the visual content with a dark backdrop + blur filter
  *  - Shows a clear warning message
@@ -13,19 +26,40 @@
 
 import { ContentMessage } from './types';
 
-// ── Overlay element ───────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const OVERLAY_ID = 'dlp-screenshare-overlay';
 
-// Tracks whether we *want* the overlay to be visible. The MutationObserver uses
-// this flag to re-inject the overlay if a SPA or dynamic page removes it.
+// ── State ─────────────────────────────────────────────────────────────────────
+
+// Tracks whether the persistent screen-share overlay is active.
+// The MutationObserver guard uses this to re-inject if the page removes it.
 let overlayActive = false;
+
+// Tracks whether the screenshot-blocking overlay is currently showing.
+// Set true while any screenshot process is running; false when it exits.
+let screenshotOverlayOn = false;
+
+// Whether this tab's URL is a sensitive/protected domain.
+// Populated on load via getStatusForTab; used by the PrintScreen fallback.
+let tabIsSensitive = false;
 
 // MutationObserver watches <html> for child removals so we can re-append the
 // overlay immediately if the page replaces or clears <body>.
 let overlayGuard: MutationObserver | null = null;
 
-function createOverlay(): HTMLDivElement {
+// ── Overlay factory ───────────────────────────────────────────────────────────
+
+/**
+ * Creates the overlay element with the given title and subtitle text.
+ * Keeping the factory parameterised lets screen-share and screenshot flashes
+ * show different messages inside the same visual shell.
+ */
+function createOverlay(
+  title: string,
+  subtitle: string,
+  note: string,
+): HTMLDivElement {
   const el = document.createElement('div');
   el.id = OVERLAY_ID;
 
@@ -61,21 +95,19 @@ function createOverlay(): HTMLDivElement {
   });
 
   // Title
-  const title = document.createElement('h1');
-  title.textContent = 'Content Hidden — Screen Share Detected';
-  Object.assign(title.style, {
-    fontSize:     '24px',
-    fontWeight:   '700',
-    margin:       '0 0 16px 0',
-    color:        '#ffffff',
-    lineHeight:   '1.3',
+  const titleEl = document.createElement('h1');
+  titleEl.textContent = title;
+  Object.assign(titleEl.style, {
+    fontSize:   '24px',
+    fontWeight: '700',
+    margin:     '0 0 16px 0',
+    color:      '#ffffff',
+    lineHeight: '1.3',
   });
 
   // Subtitle
   const sub = document.createElement('p');
-  sub.textContent =
-    'This page contains sensitive information. Its content has been hidden ' +
-    'because an active screen sharing session was detected.';
+  sub.textContent = subtitle;
   Object.assign(sub.style, {
     fontSize:   '15px',
     maxWidth:   '520px',
@@ -85,37 +117,39 @@ function createOverlay(): HTMLDivElement {
   });
 
   // Policy note
-  const note = document.createElement('p');
-  note.textContent = 'Stop screen sharing to restore access to this page.';
-  Object.assign(note.style, {
-    fontSize:        '13px',
-    color:           'rgba(255,255,255,0.45)',
-    margin:          '0',
-    borderTop:       '1px solid rgba(255,255,255,0.1)',
-    paddingTop:      '20px',
-    marginTop:       '4px',
+  const noteEl = document.createElement('p');
+  noteEl.textContent = note;
+  Object.assign(noteEl.style, {
+    fontSize:    '13px',
+    color:       'rgba(255,255,255,0.45)',
+    margin:      '0',
+    borderTop:   '1px solid rgba(255,255,255,0.1)',
+    paddingTop:  '20px',
+    marginTop:   '4px',
   });
 
   // DLP badge
   const badge = document.createElement('span');
   badge.textContent = 'DLP Agent • Data Loss Prevention';
   Object.assign(badge.style, {
-    display:         'inline-block',
-    marginTop:       '12px',
-    fontSize:        '11px',
-    color:           'rgba(255,255,255,0.3)',
-    letterSpacing:   '0.05em',
-    textTransform:   'uppercase',
+    display:       'inline-block',
+    marginTop:     '12px',
+    fontSize:      '11px',
+    color:         'rgba(255,255,255,0.3)',
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
   });
 
   el.appendChild(icon);
-  el.appendChild(title);
+  el.appendChild(titleEl);
   el.appendChild(sub);
-  el.appendChild(note);
+  el.appendChild(noteEl);
   el.appendChild(badge);
 
   return el;
 }
+
+// ── Overlay injection ─────────────────────────────────────────────────────────
 
 /**
  * Appends the overlay to <html> (documentElement) rather than <body>.
@@ -124,12 +158,12 @@ function createOverlay(): HTMLDivElement {
  *  - Appending to <html> survives SPA route changes that replace <body> content.
  *  - `position:fixed` is relative to the viewport regardless of the parent, so
  *    visual behaviour is identical.
- *  - Zoom moving its own window does not affect a fixed-positioned overlay that
- *    is anchored to the browser viewport, not the Zoom process.
  */
-function injectOverlayNode(): void {
-  if (document.getElementById(OVERLAY_ID)) return; // already present
-  document.documentElement.appendChild(createOverlay());
+function injectOverlayNode(title: string, subtitle: string, note: string): void {
+  // Remove any existing overlay first so we can replace it with updated text.
+  const existing = document.getElementById(OVERLAY_ID);
+  if (existing) existing.remove();
+  document.documentElement.appendChild(createOverlay(title, subtitle, note));
 }
 
 function startOverlayGuard(): void {
@@ -138,7 +172,12 @@ function startOverlayGuard(): void {
   overlayGuard = new MutationObserver(() => {
     // If we want the overlay but it has been removed, put it back immediately.
     if (overlayActive && !document.getElementById(OVERLAY_ID)) {
-      injectOverlayNode();
+      injectOverlayNode(
+        'Content Hidden — Screen Share Detected',
+        'This page contains sensitive information. Its content has been hidden ' +
+        'because an active screen sharing session was detected (Zoom / Teams).',
+        'Stop screen sharing to restore access to this page.',
+      );
     }
   });
 
@@ -156,9 +195,16 @@ function stopOverlayGuard(): void {
   }
 }
 
+// ── Screen-share overlay (persistent) ────────────────────────────────────────
+
 function showOverlay(): void {
   overlayActive = true;
-  injectOverlayNode();
+  injectOverlayNode(
+    'Content Hidden — Screen Share Detected',
+    'This page contains sensitive information. Its content has been hidden ' +
+    'because an active screen sharing session was detected (Zoom / Teams).',
+    'Stop screen sharing to restore access to this page.',
+  );
   document.documentElement.style.overflow = 'hidden';
   startOverlayGuard();
 }
@@ -166,10 +212,84 @@ function showOverlay(): void {
 function hideOverlay(): void {
   overlayActive = false;
   stopOverlayGuard();
-  const el = document.getElementById(OVERLAY_ID);
-  if (el) el.remove();
-  document.documentElement.style.overflow = '';
+  // Only remove the overlay if a screenshot overlay is not also active.
+  if (!screenshotOverlayOn) {
+    const el = document.getElementById(OVERLAY_ID);
+    if (el) el.remove();
+    document.documentElement.style.overflow = '';
+  }
 }
+
+// ── Screenshot flash overlay (process-aware, auto-hide only for keypress) ─────
+//
+// The native host sends:
+//   active:true  — a screenshot process started OR PrintScreen/Win+Shift+S pressed
+//   active:false — all screenshot processes have exited AND keypress window expired
+//
+// We hold the overlay up the entire time active=true. We do NOT auto-hide on a
+// timer here — that is only done as a local browser fallback (PrintScreen keydown)
+// where no active:false message will arrive from the native host.
+//
+// Safe to call repeatedly with active:true — overlay stays up, no flicker.
+
+function showScreenshotFlash(): void {
+  // Screen-share overlay takes priority — already fully blocked.
+  if (overlayActive) return;
+
+  if (screenshotOverlayOn) return; // already showing — no flicker
+  screenshotOverlayOn = true;
+
+  injectOverlayNode(
+    'Screenshot Blocked — Sensitive Content',
+    'A screenshot attempt was detected on this protected page. ' +
+    'Capturing sensitive content is not permitted by your organisation\'s DLP policy.',
+    'Close the screenshot tool to restore access to this page.',
+  );
+  document.documentElement.style.overflow = 'hidden';
+}
+
+function hideScreenshotFlash(): void {
+  if (!screenshotOverlayOn) return;
+  screenshotOverlayOn = false;
+
+  // Only remove overlay if the persistent screen-share overlay is not active.
+  if (!overlayActive) {
+    const el = document.getElementById(OVERLAY_ID);
+    if (el) el.remove();
+    document.documentElement.style.overflow = '';
+  }
+}
+
+// ── Browser-side PrintScreen fallback (keypress timer) ───────────────────────
+// Used when the native host is not running. Shows overlay for KEYPRESS_FLASH_MS
+// then hides — mirrors the KEYPRESS_CLEAR_MS watchdog in ScreenshotDetector.cpp.
+// When the native host IS running, active:false will arrive and call
+// hideScreenshotFlash() explicitly, so this timer is harmless (already hidden).
+
+const KEYPRESS_FLASH_MS = 3000;
+let keypressFlashTimer: ReturnType<typeof setTimeout> | null = null;
+
+function triggerKeypressFlash(): void {
+  showScreenshotFlash();
+
+  if (keypressFlashTimer !== null) clearTimeout(keypressFlashTimer);
+  keypressFlashTimer = setTimeout(() => {
+    keypressFlashTimer = null;
+    hideScreenshotFlash();
+  }, KEYPRESS_FLASH_MS);
+}
+
+// ── Browser-side PrintScreen fallback ────────────────────────────────────────
+// Acts as an immediate local fallback when the native host is not running.
+// The native host keyboard hook is more reliable (fires before OS acts on the
+// key), but this covers the browser-internal PrintScreen case with zero latency.
+// Uses capture phase (third arg = true) to fire before any page handler.
+
+document.addEventListener('keydown', (e: KeyboardEvent) => {
+  if (e.key === 'PrintScreen' && tabIsSensitive) {
+    triggerKeypressFlash();
+  }
+}, true);
 
 // ── Message listener ──────────────────────────────────────────────────────────
 
@@ -178,6 +298,14 @@ chrome.runtime.onMessage.addListener((message: ContentMessage) => {
     showOverlay();
   } else if (message.action === 'unblur' || (message.action === 'blur' && !message.active)) {
     hideOverlay();
+  } else if (message.action === 'screenshot-flash') {
+    // active:true  → screenshot process started or key pressed — show and hold
+    // active:false → all screenshot processes exited — hide
+    if (message.active) {
+      showScreenshotFlash();
+    } else {
+      hideScreenshotFlash();
+    }
   }
 });
 
@@ -189,7 +317,11 @@ chrome.runtime.onMessage.addListener((message: ContentMessage) => {
 
 chrome.runtime.sendMessage({ action: 'getStatusForTab' }, (response) => {
   if (chrome.runtime.lastError) return; // background not ready yet
-  if (response?.sharing === true && response?.sensitive === true) {
+
+  // Cache sensitivity for the PrintScreen keydown fallback.
+  tabIsSensitive = response?.sensitive === true;
+
+  if (response?.sharing === true && tabIsSensitive) {
     // Wait for DOM to be ready before injecting overlay
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', showOverlay, { once: true });

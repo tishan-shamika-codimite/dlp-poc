@@ -2,13 +2,13 @@
 
 /** Message sent from Native Messaging Host → background service worker */
 export interface NativeMessage {
-  type: 'screenshare' | 'pong';
+  type: 'screenshare' | 'screenshot' | 'pong';
   active?: boolean;
 }
 
 /** Message sent from background → content script */
 export interface ContentMessage {
-  action: 'blur' | 'unblur' | 'ping';
+  action: 'blur' | 'unblur' | 'ping' | 'screenshot-flash';
   active: boolean;
 }
 

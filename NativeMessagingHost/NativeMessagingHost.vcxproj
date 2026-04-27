@@ -63,7 +63,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>shell32.lib;user32.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
@@ -82,13 +82,14 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>shell32.lib;user32.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
   <ItemGroup>
     <ClInclude Include="JsonMessage.h" />
     <ClInclude Include="ScreenShareDetector.h" />
+    <ClInclude Include="ScreenshotDetector.h" />
     <ClInclude Include="RegistrySetup.h" />
   </ItemGroup>
 
@@ -96,6 +97,7 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="JsonMessage.cpp" />
     <ClCompile Include="ScreenShareDetector.cpp" />
+    <ClCompile Include="ScreenshotDetector.cpp" />
     <ClCompile Include="RegistrySetup.cpp" />
   </ItemGroup>
 

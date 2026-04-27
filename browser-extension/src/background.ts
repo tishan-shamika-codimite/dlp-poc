@@ -79,6 +79,23 @@ async function broadcastToSensitiveTabs(active: boolean): Promise<void> {
   }
 }
 
+// Sends a screenshot-flash message to all currently open sensitive tabs.
+// active:true  → show overlay (hold until explicitly cleared)
+// active:false → hide overlay (screenshot process exited)
+async function broadcastScreenshotFlash(active: boolean): Promise<void> {
+  const settings = await getSettings();
+  if (!settings.enabled) return;
+
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (!tab.id || !tab.url) continue;
+    if (!isSensitiveUrl(tab.url, settings.blockedDomains)) continue;
+
+    const msg: ContentMessage = { action: 'screenshot-flash', active };
+    chrome.tabs.sendMessage(tab.id, msg).catch(() => {});
+  }
+}
+
 // ── Native Messaging connection ───────────────────────────────────────────────
 
 function connectToHost(): void {
@@ -101,6 +118,14 @@ function connectToHost(): void {
         broadcastToSensitiveTabs(isSharingActive);
       }
     }
+
+    if (msg.type === 'screenshot' && typeof msg.active === 'boolean') {
+      // active:true  — screenshot process started or key pressed → show overlay
+      // active:false — all screenshot processes exited            → hide overlay
+      console.log('[DLP] Screenshot state changed:', msg.active);
+      broadcastScreenshotFlash(msg.active);
+    }
+
     // pong is a no-op — just confirms the host is alive
   });
 
