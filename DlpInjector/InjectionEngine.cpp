@@ -10,7 +10,10 @@
 
 static const std::vector<std::wstring> kTargetProcesses = {
     L"Slack.exe", L"chrome.exe", L"msedge.exe", L"notepad.exe",
-    L"Acrobat.exe", L"AcroRd32.exe"
+    L"Acrobat.exe", L"AcroRd32.exe",
+    // Screen-share detection: inject into Zoom and Microsoft Teams so
+    // ScreenShareHook.cpp can detect active capture via BitBlt / StretchBlt.
+    L"Zoom.exe", L"ms-teams.exe", L"Teams.exe"
 };
 
 static constexpr DWORD kScanIntervalMs  = 3000; // Time between injection scans

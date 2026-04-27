@@ -2,6 +2,7 @@
 #include "MinHook.h"
 #include "ClipboardHook.h"
 #include "FileUploadHook.h"
+#include "ScreenShareHook.h"
 #include "DlpCommon.h"
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID /*lpReserved*/) {
@@ -15,6 +16,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID /*lpRese
 
         ClipboardHook_Install();
         FileUploadHook_Install();
+        ScreenShareHook_Install();
 
         if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK)
             return FALSE;
@@ -23,6 +25,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID /*lpRese
         break;
 
     case DLL_PROCESS_DETACH:
+        ScreenShareHook_Remove();
         FileUploadHook_Remove();
         ClipboardHook_Remove();
         MH_DisableHook(MH_ALL_HOOKS);

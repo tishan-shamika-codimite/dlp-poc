@@ -1,0 +1,9 @@
+{
+  "name": "com.dlp.screenshare",
+  "description": "DLP Screen Share Detector - Native Messaging Host",
+  "path": "C:\\Program Files\\DlpAgent\\NativeMessagingHost.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://dhfajgpmkjdbpfibflnocpgfdlhchfio/"
+  ]
+}

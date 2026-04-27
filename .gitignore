@@ -49,3 +49,7 @@ UpgradeLog.htm
 # User-specific files
 .claude/
 .opencode/
+
+# Extension Files
+browser-extension/node_modules/
+browser-extension/dist/

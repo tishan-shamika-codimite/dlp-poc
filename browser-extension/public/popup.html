@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DLP Screen Share Blocker</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 360px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      color: #1a1a2e;
+      background: #f8f9fc;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #fff;
+      padding: 16px 18px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .header-icon { font-size: 24px; }
+    .header-title { font-size: 14px; font-weight: 700; letter-spacing: 0.02em; }
+    .header-sub   { font-size: 11px; color: rgba(255,255,255,0.55); margin-top: 2px; }
+
+    /* ── Status banner ── */
+    .status-banner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 18px;
+      background: #fff;
+      border-bottom: 1px solid #e8eaf0;
+    }
+    .status-dot {
+      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    .status-dot.active   { background: #e53e3e; box-shadow: 0 0 0 3px rgba(229,62,62,0.2); }
+    .status-dot.inactive { background: #48bb78; box-shadow: 0 0 0 3px rgba(72,187,120,0.2); }
+    #status-text { font-size: 12px; color: #555; }
+
+    /* ── Section ── */
+    .section { padding: 14px 18px; border-bottom: 1px solid #e8eaf0; background: #fff; }
+    .section + .section { margin-top: 8px; }
+    .section-title {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: #888; margin-bottom: 10px;
+    }
+
+    /* ── Toggle ── */
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; }
+    .toggle-label { font-size: 13px; color: #333; }
+    .switch { position: relative; display: inline-block; width: 36px; height: 20px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; cursor: pointer; inset: 0;
+      background: #cbd5e0; border-radius: 20px; transition: 0.2s;
+    }
+    .slider::before {
+      content: ''; position: absolute; height: 14px; width: 14px;
+      left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.2s;
+    }
+    input:checked + .slider { background: #4299e1; }
+    input:checked + .slider::before { transform: translateX(16px); }
+
+    /* ── Domain list ── */
+    #domain-list { list-style: none; max-height: 160px; overflow-y: auto; margin-bottom: 10px; }
+    .domain-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 5px 8px; border-radius: 6px; margin-bottom: 3px;
+      background: #f0f4ff; font-size: 12px;
+    }
+    .domain-name { color: #2b4acb; word-break: break-all; }
+    .remove-btn {
+      background: none; border: none; cursor: pointer; color: #a0aec0;
+      font-size: 16px; line-height: 1; padding: 0 2px; flex-shrink: 0;
+    }
+    .remove-btn:hover { color: #e53e3e; }
+
+    /* ── Add domain row ── */
+    .add-row { display: flex; gap: 6px; }
+    #domain-input {
+      flex: 1; padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 6px;
+      font-size: 12px; outline: none; transition: border 0.15s;
+    }
+    #domain-input:focus { border-color: #4299e1; }
+    #add-btn {
+      padding: 6px 12px; background: #4299e1; color: #fff; border: none;
+      border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;
+    }
+    #add-btn:hover { background: #3182ce; }
+
+    /* ── Footer ── */
+    .footer {
+      padding: 12px 18px; display: flex; align-items: center; justify-content: space-between;
+      background: #f8f9fc;
+    }
+    #save-btn {
+      padding: 7px 20px; background: #1a1a2e; color: #fff; border: none;
+      border-radius: 7px; cursor: pointer; font-size: 13px; font-weight: 600;
+    }
+    #save-btn:hover { background: #16213e; }
+    #saved-msg {
+      font-size: 12px; color: #48bb78; opacity: 0; transition: opacity 0.3s;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <span class="header-icon">🛡️</span>
+    <div>
+      <div class="header-title">DLP Screen Share Blocker</div>
+      <div class="header-sub">Data Loss Prevention Agent</div>
+    </div>
+  </div>
+
+  <!-- Live status -->
+  <div class="status-banner">
+    <span id="status-dot" class="status-dot inactive"></span>
+    <span id="status-text">Checking…</span>
+  </div>
+
+  <!-- Enable/Disable toggle -->
+  <div class="section">
+    <div class="toggle-row">
+      <span class="toggle-label">Enable protection</span>
+      <label class="switch">
+        <input type="checkbox" id="enable-toggle" checked />
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <!-- Protected domains -->
+  <div class="section">
+    <div class="section-title">Protected Domains</div>
+    <ul id="domain-list"></ul>
+    <div class="add-row">
+      <input type="text" id="domain-input" placeholder="e.g. mail.google.com" />
+      <button id="add-btn">Add</button>
+    </div>
+  </div>
+
+  <!-- Save footer -->
+  <div class="footer">
+    <button id="save-btn">Save Settings</button>
+    <span id="saved-msg">Saved!</span>
+  </div>
+
+  <script src="../dist/popup.js"></script>
+</body>
+</html>

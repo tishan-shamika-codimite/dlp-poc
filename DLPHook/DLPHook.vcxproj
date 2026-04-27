@@ -84,6 +84,7 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
+      <AdditionalDependencies>dxgi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -118,6 +119,7 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
+      <AdditionalDependencies>dxgi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -136,6 +138,7 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
+      <AdditionalDependencies>dxgi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -145,6 +148,7 @@
     <ClInclude Include="DlpCommon.h" />
     <ClInclude Include="ClipboardHook.h" />
     <ClInclude Include="FileUploadHook.h" />
+    <ClInclude Include="ScreenShareHook.h" />
     <ClInclude Include="Inflate.h" />
     <ClInclude Include="PdfTextExtractor.h" />
   </ItemGroup>
@@ -153,6 +157,7 @@
     <ClCompile Include="DlpCommon.cpp" />
     <ClCompile Include="ClipboardHook.cpp" />
     <ClCompile Include="FileUploadHook.cpp" />
+    <ClCompile Include="ScreenShareHook.cpp" />
     <ClCompile Include="Inflate.cpp" />
     <ClCompile Include="PdfTextExtractor.cpp" />
     <ClCompile Include="pch.cpp">

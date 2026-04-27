@@ -33,14 +33,12 @@
 
     <!-- Installation directory structure -->
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="DlpAgent">
-      </Directory>
+      <Directory Id="INSTALLFOLDER" Name="DlpAgent" />
     </StandardDirectory>
 
-    <!-- Main component: DLP Agent executable and hook DLL -->
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
 
-      <!-- DlpInjector.exe the Windows Service executable -->
+      <!-- DlpInjector.exe - the Windows Service executable -->
       <Component Id="DlpInjectorExe" Guid="B2C3D4E5-F6A7-8901-BCDE-F23456789012">
         <File Id="DlpInjectorExe"
               Source="..\DlpInjector\x64\Release\DlpInjector.exe"
@@ -72,11 +70,60 @@
                         Wait="yes" />
       </Component>
 
-      <!-- DLPHook.dll the injection hook library -->
+      <!-- DLPHook.dll - the injection hook library -->
       <Component Id="DlpHookDll" Guid="C3D4E5F6-A7B8-9012-CDEF-345678901234">
         <File Id="DlpHookDll"
               Source="..\DLPHook\x64\Release\DLPHook.dll"
               KeyPath="yes" />
+      </Component>
+
+      <!--
+        NativeMessagingHost.exe bridges injected DLL screen-share signals to
+        the browser extension via the Chrome/Edge Native Messaging protocol.
+        The exe self-registers on first run via its built-in RegistrySetup module.
+        Registry keys below pre-register it at install time for all users.
+      -->
+      <Component Id="NativeMessagingHostExe" Guid="D4E5F6A7-B8C9-0123-DEFA-456789012345">
+        <File Id="NativeMessagingHostExe"
+              Source="..\NativeMessagingHost\x64\Release\NativeMessagingHost.exe"
+              KeyPath="yes" />
+      </Component>
+
+      <!--
+        Native Messaging Host JSON manifest installed alongside the exe.
+        The manifest path is registered in HKLM so all users share the same host.
+        The allowed_origins field must list the extension ID after loading it
+        from chrome://extensions (replace REPLACE_WITH_YOUR_EXTENSION_ID).
+      -->
+      <Component Id="NmhManifest" Guid="E5F6A7B8-C9D0-1234-EFAB-567890123456">
+        <File Id="NmhManifestFile"
+              Source="..\NativeMessagingHost\com.dlp.screenshare.json"
+              KeyPath="yes" />
+      </Component>
+
+      <!--
+        Registry: Register the NM host for Chrome (HKLM so it applies to all users).
+        Value points to the JSON manifest installed beside the exe in INSTALLFOLDER.
+      -->
+      <Component Id="RegChrome" Guid="F6A7B8C9-D0E1-2345-FABC-678901234567">
+        <RegistryValue Root="HKLM"
+                       Key="SOFTWARE\Google\Chrome\NativeMessagingHosts\com.dlp.screenshare"
+                       Value="[INSTALLFOLDER]com.dlp.screenshare.json"
+                       Type="string"
+                       Action="write"
+                       KeyPath="yes" />
+      </Component>
+
+      <!--
+        Registry: Register the NM host for Microsoft Edge (HKLM).
+      -->
+      <Component Id="RegEdge" Guid="A7B8C9D0-E1F2-3456-ABCD-789012345678">
+        <RegistryValue Root="HKLM"
+                       Key="SOFTWARE\Microsoft\Edge\NativeMessagingHosts\com.dlp.screenshare"
+                       Value="[INSTALLFOLDER]com.dlp.screenshare.json"
+                       Type="string"
+                       Action="write"
+                       KeyPath="yes" />
       </Component>
 
     </ComponentGroup>

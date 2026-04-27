@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "DLP Screen Share Blocker",
+  "version": "1.0.0",
+  "description": "Blurs sensitive pages (Gmail, GitHub, etc.) when Zoom or Teams screen sharing is detected.",
+
+  "permissions": [
+    "nativeMessaging",
+    "tabs",
+    "storage",
+    "activeTab"
+  ],
+
+  "host_permissions": [
+    "<all_urls>"
+  ],
+
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+
+  "action": {
+    "default_popup": "public/popup.html",
+    "default_icon": {
+      "16": "public/icons/icon16.png",
+      "48": "public/icons/icon48.png",
+      "128": "public/icons/icon128.png"
+    }
+  },
+
+  "icons": {
+    "16": "public/icons/icon16.png",
+    "48": "public/icons/icon48.png",
+    "128": "public/icons/icon128.png"
+  }
+}
